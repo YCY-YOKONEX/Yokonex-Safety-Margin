@@ -4,14 +4,18 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../app/game_coordinator.dart';
 import '../domain/activity_region.dart';
+import '../domain/coyote_protocol.dart';
 import '../domain/ems_protocol.dart';
 import '../domain/ems_waveform.dart';
 import '../domain/game_engine.dart';
 import '../domain/pose_sample.dart';
 import '../services/ems_device.dart';
+import '../services/coyote_device.dart';
+import '../services/output_device.dart';
 import 'app_localizations.dart';
 import 'app_theme.dart';
 import 'camera_stage.dart';
@@ -233,8 +237,7 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
   }
 
   Future<void> _emsSettings() async {
-    final device = c.ems;
-    if (device == null) return;
+    if (c.output == null) return;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -242,8 +245,7 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
       ),
-      builder: (_) =>
-          _EmsSettingsSheet(device: device, onSave: c.updateEmsConfig),
+      builder: (_) => _OutputSettingsSheet(coordinator: c),
     );
   }
 
@@ -289,7 +291,7 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
                   ),
                 _LanguageMenu(onSelected: widget.onLocaleChanged),
               ],
-              bottom: !finished && ready && c.ems != null
+              bottom: !finished && ready && c.output != null
                   ? PreferredSize(
                       preferredSize: const Size.fromHeight(48),
                       child: SizedBox(
@@ -303,7 +305,7 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
                               child: TextButton.icon(
                                 onPressed: c.loading ? null : _emsSettings,
                                 style: TextButton.styleFrom(
-                                  foregroundColor: c.ems!.readyToOutput
+                                  foregroundColor: c.output!.readyToOutput
                                       ? AppColors.green
                                       : AppColors.muted,
                                   padding: const EdgeInsets.symmetric(
@@ -311,7 +313,7 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
                                   ),
                                 ),
                                 icon: Icon(
-                                  c.ems!.connected
+                                  c.output!.connected
                                       ? Icons.bluetooth_connected
                                       : Icons.bluetooth_disabled,
                                 ),
@@ -444,12 +446,14 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
                                 context.l10n.text(
                                   _counting
                                       ? '准备中…'
-                                      : c.ems == null
+                                      : c.output == null
                                       ? '开始游戏'
-                                      : !c.ems!.connected
-                                      ? '连接 EMS 设备'
-                                      : (c.ems!.config.intensityA == 0 &&
-                                            c.ems!.config.intensityB == 0)
+                                      : !c.output!.connected
+                                      ? c.outputDeviceType ==
+                                                OutputDeviceType.dglabCoyote
+                                            ? '连接郊狼'
+                                            : '连接 EMS 设备'
+                                      : !c.output!.readyToOutput
                                       ? '设置强度'
                                       : '开始游戏',
                                 ),
@@ -481,6 +485,20 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
                                   ),
                                 ),
                                 const SizedBox(width: 12),
+                                if (c.output != null) ...[
+                                  IconButton.filled(
+                                    key: const ValueKey('emergency_stop'),
+                                    tooltip: '立即停止全部设备输出',
+                                    onPressed: c.emergencyStop,
+                                    style: IconButton.styleFrom(
+                                      backgroundColor: AppColors.alert,
+                                    ),
+                                    icon: const Icon(
+                                      Icons.stop_circle_outlined,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                ],
                                 Expanded(
                                   child: OutlinedButton.icon(
                                     onPressed: c.finish,
@@ -1044,11 +1062,107 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   );
 }
 
+class _OutputSettingsSheet extends StatefulWidget {
+  const _OutputSettingsSheet({required this.coordinator});
+
+  final GameCoordinator coordinator;
+
+  @override
+  State<_OutputSettingsSheet> createState() => _OutputSettingsSheetState();
+}
+
+class _OutputSettingsSheetState extends State<_OutputSettingsSheet> {
+  @override
+  void initState() {
+    super.initState();
+    widget.coordinator.addListener(_changed);
+  }
+
+  @override
+  void dispose() {
+    widget.coordinator.removeListener(_changed);
+    super.dispose();
+  }
+
+  void _changed() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.coordinator;
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * .9,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 16, 12, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '输出设备',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                IconButton(
+                  tooltip: context.l10n.text('关闭设备设置'),
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: SegmentedButton<OutputDeviceType>(
+              key: const ValueKey('output_device_type'),
+              segments: const [
+                ButtonSegment(
+                  value: OutputDeviceType.yokonex,
+                  icon: Icon(Icons.bluetooth),
+                  label: Text('Yokonex'),
+                ),
+                ButtonSegment(
+                  value: OutputDeviceType.dglabCoyote,
+                  icon: Icon(Icons.qr_code_2),
+                  label: Text('DG-LAB Coyote'),
+                ),
+              ],
+              selected: {c.outputDeviceType},
+              onSelectionChanged: (selection) {
+                if (selection.isNotEmpty) {
+                  unawaited(c.updateOutputDeviceType(selection.first));
+                }
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: c.outputDeviceType == OutputDeviceType.yokonex
+                ? _EmsSettingsSheet(
+                    device: c.ems!,
+                    onSave: c.updateEmsConfig,
+                    embedded: true,
+                  )
+                : _CoyoteSettingsSheet(coordinator: c),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _EmsSettingsSheet extends StatefulWidget {
-  const _EmsSettingsSheet({required this.device, required this.onSave});
+  const _EmsSettingsSheet({
+    required this.device,
+    required this.onSave,
+    this.embedded = false,
+  });
 
   final EmsDeviceController device;
   final ValueChanged<EmsConfig> onSave;
+  final bool embedded;
 
   @override
   State<_EmsSettingsSheet> createState() => _EmsSettingsSheetState();
@@ -1176,20 +1290,26 @@ class _EmsSettingsSheetState extends State<_EmsSettingsSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                context.l10n.text('EMS 设备'),
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              IconButton(
-                tooltip: context.l10n.text('关闭设备设置'),
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close),
-              ),
-            ],
-          ),
+          if (!widget.embedded)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  context.l10n.text('EMS 设备'),
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                IconButton(
+                  tooltip: context.l10n.text('关闭设备设置'),
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            )
+          else
+            Text(
+              context.l10n.text('EMS 设备'),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
           Row(
             children: [
               Text(
@@ -1347,6 +1467,353 @@ class _EmsSettingsSheetState extends State<_EmsSettingsSheet> {
       ),
     );
   }
+}
+
+class _CoyoteSettingsSheet extends StatefulWidget {
+  const _CoyoteSettingsSheet({required this.coordinator});
+
+  final GameCoordinator coordinator;
+
+  @override
+  State<_CoyoteSettingsSheet> createState() => _CoyoteSettingsSheetState();
+}
+
+class _CoyoteSettingsSheetState extends State<_CoyoteSettingsSheet> {
+  late CoyoteConfig _config = widget.coordinator.coyote!.config;
+
+  CoyoteDeviceController get device => widget.coordinator.coyote!;
+
+  @override
+  void initState() {
+    super.initState();
+    device.addListener(_changed);
+  }
+
+  @override
+  void dispose() {
+    device.removeListener(_changed);
+    super.dispose();
+  }
+
+  void _changed() {
+    if (mounted) setState(() {});
+  }
+
+  String _phaseLabel(CoyoteConnectionPhase phase) => switch (phase) {
+    CoyoteConnectionPhase.idle => '未连接',
+    CoyoteConnectionPhase.connecting => '正在连接服务',
+    CoyoteConnectionPhase.waitingForScan => '等待扫码',
+    CoyoteConnectionPhase.waitingForDevice => 'App 已连接，等待郊狼',
+    CoyoteConnectionPhase.connected => '已连接',
+    CoyoteConnectionPhase.disconnected => '已断开',
+    CoyoteConnectionPhase.error => '错误',
+  };
+
+  Future<void> _test() async {
+    widget.coordinator.updateCoyoteConfig(_config);
+    try {
+      await device.testOutput();
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已发送低强度短脉冲测试')));
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error.toString().replaceFirst('Bad state: ', '')),
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final connectedDevice = device.activeDevice;
+    final pairingUrl = device.pairingUrl;
+    final isConnecting = device.phase == CoyoteConnectionPhase.connecting;
+    final canConnect =
+        !isConnecting &&
+        device.phase != CoyoteConnectionPhase.waitingForScan &&
+        device.phase != CoyoteConnectionPhase.waitingForDevice &&
+        device.phase != CoyoteConnectionPhase.connected;
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(
+        24,
+        8,
+        24,
+        MediaQuery.viewInsetsOf(context).bottom + 24,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'DG-LAB Coyote 3.0',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                ),
+              ),
+              Text(
+                _phaseLabel(device.phase),
+                key: const ValueKey('coyote_status'),
+                style: TextStyle(
+                  color: device.connected ? AppColors.green : AppColors.muted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          if (pairingUrl != null &&
+              device.phase == CoyoteConnectionPhase.waitingForScan) ...[
+            const SizedBox(height: 16),
+            Center(
+              child: ColoredBox(
+                color: Colors.white,
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: QrImageView(
+                    key: const ValueKey('coyote_qr'),
+                    data: pairingUrl,
+                    size: 210,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              '使用 DG-LAB 官方 App 扫描二维码',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.muted),
+            ),
+          ],
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  key: const ValueKey('coyote_connect'),
+                  onPressed: canConnect
+                      ? (device.phase == CoyoteConnectionPhase.idle
+                            ? device.connect
+                            : device.reconnect)
+                      : null,
+                  icon: Icon(
+                    device.phase == CoyoteConnectionPhase.idle
+                        ? Icons.link
+                        : Icons.refresh,
+                  ),
+                  label: Text(
+                    device.phase == CoyoteConnectionPhase.idle
+                        ? '连接郊狼'
+                        : isConnecting
+                        ? '连接中'
+                        : '重新连接',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                onPressed: device.phase == CoyoteConnectionPhase.idle
+                    ? null
+                    : device.disconnect,
+                icon: const Icon(Icons.link_off),
+                label: const Text('断开'),
+              ),
+            ],
+          ),
+          if (connectedDevice != null) ...[
+            const SizedBox(height: 10),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.electrical_services),
+              title: Text(connectedDevice.name),
+              subtitle: Text(
+                'A ${connectedDevice.intensityA ?? 0} · '
+                'B ${connectedDevice.intensityB ?? 0} · '
+                '电量 ${connectedDevice.power?.toString() ?? '--'}%',
+              ),
+            ),
+          ],
+          if (device.error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                device.error!,
+                style: const TextStyle(color: AppColors.alert),
+              ),
+            ),
+          const Divider(height: 32),
+          const Text('输出通道', style: TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          SegmentedButton<CoyoteChannel>(
+            key: const ValueKey('coyote_channel'),
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(value: CoyoteChannel.a, label: Text('A')),
+              ButtonSegment(value: CoyoteChannel.b, label: Text('B')),
+              ButtonSegment(value: CoyoteChannel.both, label: Text('A+B')),
+            ],
+            selected: {_config.channel},
+            onSelectionChanged: (selection) => setState(
+              () => _config = _config.copyWith(channel: selection.first),
+            ),
+          ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<CoyoteWaveform>(
+            key: const ValueKey('coyote_waveform'),
+            initialValue: _config.waveform,
+            decoration: const InputDecoration(labelText: '波形'),
+            items: [
+              for (final waveform in coyoteWaveforms)
+                DropdownMenuItem(
+                  value: waveform.id,
+                  child: Text(waveform.label),
+                ),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                setState(() => _config = _config.copyWith(waveform: value));
+              }
+            },
+          ),
+          const SizedBox(height: 18),
+          _CoyoteSlider(
+            label: '触发强度',
+            valueLabel: '${_config.triggerIntensity}',
+            value: _config.triggerIntensity.toDouble(),
+            min: 0,
+            max: CoyoteConfig.protocolMaxIntensity.toDouble(),
+            divisions: CoyoteConfig.protocolMaxIntensity,
+            onChanged: (value) => setState(
+              () => _config = _config.copyWith(triggerIntensity: value.round()),
+            ),
+          ),
+          _CoyoteSlider(
+            label: '最大允许强度',
+            valueLabel: '${_config.maxIntensity}',
+            value: _config.maxIntensity.toDouble(),
+            min: 1,
+            max: CoyoteConfig.protocolMaxIntensity.toDouble(),
+            divisions: CoyoteConfig.protocolMaxIntensity - 1,
+            onChanged: (value) => setState(
+              () => _config = _config.copyWith(maxIntensity: value.round()),
+            ),
+          ),
+          _CoyoteSlider(
+            label: '触发持续时间',
+            valueLabel: '${_config.duration.inMilliseconds} ms',
+            value: _config.duration.inMilliseconds.toDouble(),
+            min: 100,
+            max: 5000,
+            divisions: 49,
+            onChanged: (value) => setState(
+              () => _config = _config.copyWith(
+                duration: Duration(milliseconds: value.round()),
+              ),
+            ),
+          ),
+          _CoyoteSlider(
+            label: 'Cooldown',
+            valueLabel:
+                '${(_config.cooldown.inMilliseconds / 1000).toStringAsFixed(1)} s',
+            value: _config.cooldown.inMilliseconds
+                .toDouble()
+                .clamp(500, 10000)
+                .toDouble(),
+            min: 500,
+            max: 10000,
+            divisions: 19,
+            onChanged: (value) => setState(
+              () => _config = _config.copyWith(
+                cooldown: Duration(milliseconds: value.round()),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  key: const ValueKey('coyote_test'),
+                  onPressed: device.connected ? _test : null,
+                  icon: const Icon(Icons.bolt),
+                  label: const Text('低强度测试'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.icon(
+                  key: const ValueKey('coyote_emergency_stop'),
+                  onPressed: widget.coordinator.emergencyStop,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.alert,
+                  ),
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: const Text('立即停止'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            key: const ValueKey('coyote_save'),
+            onPressed: () {
+              widget.coordinator.updateCoyoteConfig(_config);
+              Navigator.pop(context);
+            },
+            icon: const Icon(Icons.check),
+            label: const Text('保存设备设置'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CoyoteSlider extends StatelessWidget {
+  const _CoyoteSlider({
+    required this.label,
+    required this.valueLabel,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.divisions,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String valueLabel;
+  final double value;
+  final double min;
+  final double max;
+  final int divisions;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label),
+          Text(valueLabel, style: const TextStyle(fontWeight: FontWeight.w700)),
+        ],
+      ),
+      Slider(
+        value: value,
+        min: min,
+        max: max,
+        divisions: divisions,
+        label: valueLabel,
+        onChanged: onChanged,
+      ),
+    ],
+  );
 }
 
 class _Results extends StatelessWidget {

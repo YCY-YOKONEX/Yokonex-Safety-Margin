@@ -4,10 +4,13 @@ import 'package:flutter/foundation.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../domain/activity_region.dart';
+import '../domain/coyote_protocol.dart';
 import '../domain/ems_protocol.dart';
 import '../domain/game_engine.dart';
 import '../domain/pose_sample.dart';
 import '../services/ems_device.dart';
+import '../services/coyote_device.dart';
+import '../services/output_device.dart';
 import '../services/pose_camera.dart';
 import '../services/settings_store.dart';
 
@@ -15,24 +18,31 @@ class GameCoordinator extends ChangeNotifier {
   GameCoordinator({
     GameEngine? engine,
     EmsDeviceController? ems,
+    CoyoteDeviceController? coyote,
+    OutputDeviceController? output,
     bool enableEms = false,
     PoseCamera Function(int Function())? cameraFactory,
     SettingsStore? store,
     Future<void> Function(bool)? keepAwake,
     bool autoTick = true,
-  }) : ems = enableEms ? (ems ?? EmsDeviceController()) : ems,
-       _store = store ?? LocalSettingsStore(),
+  }) : _store = store ?? LocalSettingsStore(),
        _keepAwake =
            keepAwake ?? ((enabled) => WakelockPlus.toggle(enable: enabled)) {
-    this.engine = engine ?? GameEngine(sink: this.ems ?? MemoryTriggerSink());
+    final outputEnabled =
+        enableEms || ems != null || coyote != null || output != null;
+    this.output = outputEnabled
+        ? (output ?? OutputDeviceController(yokonex: ems, coyote: coyote))
+        : null;
+    this.engine =
+        engine ?? GameEngine(sink: this.output ?? MemoryTriggerSink());
     camera =
         (cameraFactory ??
         ((readEpoch) =>
             MlKitPoseCamera(readEpoch: readEpoch)))(() => this.engine.epoch);
     camera.addListener(_cameraChanged);
     this.engine.addListener(_engineChanged);
-    this.ems?.addListener(_emsChanged);
-    this.ems?.onFault = _emsFault;
+    this.output?.addListener(_outputChanged);
+    this.output?.onFault = _outputFault;
     if (autoTick) {
       _timer = Timer.periodic(
         const Duration(milliseconds: 100),
@@ -42,7 +52,11 @@ class GameCoordinator extends ChangeNotifier {
   }
 
   late final GameEngine engine;
-  final EmsDeviceController? ems;
+  late final OutputDeviceController? output;
+  EmsDeviceController? get ems => output?.yokonex;
+  CoyoteDeviceController? get coyote => output?.coyote;
+  OutputDeviceType get outputDeviceType =>
+      output?.selected ?? OutputDeviceType.yokonex;
   late final PoseCamera camera;
   final SettingsStore _store;
   final Future<void> Function(bool) _keepAwake;
@@ -67,10 +81,10 @@ class GameCoordinator extends ChangeNotifier {
       !editing &&
       camera.ready &&
       region != null &&
-      (ems?.readyToOutput ?? true) &&
+      (output?.readyToOutput ?? true) &&
       engine.canStart;
   bool get canResume =>
-      camera.ready && (ems?.readyToOutput ?? true) && engine.canResume;
+      camera.ready && (output?.readyToOutput ?? true) && engine.canResume;
 
   Future<void> initialize() async {
     SavedSetup setup;
@@ -83,8 +97,12 @@ class GameCoordinator extends ChangeNotifier {
     if (_disposed) return;
     engine.configure(setup.config);
     ems?.configure(setup.emsConfig);
-    // 蓝牙权限在应用启动阶段申请，避免首次扫描紧接权限弹窗读取到旧状态。
-    await ems?.requestPermissions();
+    coyote?.configure(setup.coyoteConfig);
+    if (output != null) output!.selected = setup.outputDeviceType;
+    // 仅选择原有 Yokonex 时申请蓝牙权限，选择郊狼不会弹出无关权限。
+    if (outputDeviceType == OutputDeviceType.yokonex) {
+      await ems?.requestPermissions();
+    }
     if (_disposed) return;
     region = setup.region;
     drawingMode = region?.mode ?? RegionMode.freehand;
@@ -140,18 +158,18 @@ class GameCoordinator extends ChangeNotifier {
     }
     if (_lastPhase == GamePhase.running &&
         engine.phase != GamePhase.running &&
-        ems != null) {
-      unawaited(ems!.stop().catchError((Object _) {}));
+        output != null) {
+      unawaited(output!.stop().catchError((Object _) {}));
     }
     _lastPhase = engine.phase;
     notifyListeners();
   }
 
-  void _emsChanged() {
+  void _outputChanged() {
     if (!_disposed) notifyListeners();
   }
 
-  void _emsFault(String message) {
+  void _outputFault(String message) {
     if (_disposed) return;
     _showNotice(message);
     if (engine.phase == GamePhase.running) {
@@ -199,6 +217,25 @@ class GameCoordinator extends ChangeNotifier {
     unawaited(_save());
   }
 
+  void updateCoyoteConfig(CoyoteConfig value) {
+    if (engine.phase != GamePhase.ready || coyote == null) return;
+    coyote!.configure(value);
+    unawaited(_save());
+  }
+
+  Future<void> updateOutputDeviceType(OutputDeviceType value) async {
+    if (engine.phase != GamePhase.ready || output == null) return;
+    await output!.select(value);
+    if (value == OutputDeviceType.yokonex) await ems?.requestPermissions();
+    await _save();
+  }
+
+  Future<void> emergencyStop() async {
+    if (engine.phase == GamePhase.running) engine.pause(PauseReason.manual);
+    await output?.emergencyStop();
+    _showNotice('已立即停止全部设备输出');
+  }
+
   Future<void> switchCamera() async {
     if (engine.phase != GamePhase.ready ||
         !camera.canSwitch ||
@@ -241,6 +278,7 @@ class GameCoordinator extends ChangeNotifier {
       editing = false;
       sample = null;
       engine.pause(PauseReason.background);
+      await output?.emergencyStop();
       await camera.suspend();
     } else if (!loading && engine.phase != GamePhase.finished) {
       await camera.initialize();
@@ -255,6 +293,8 @@ class GameCoordinator extends ChangeNotifier {
           region: region,
           cameraId: camera.cameraId,
           emsConfig: ems?.config ?? const EmsConfig(),
+          outputDeviceType: outputDeviceType,
+          coyoteConfig: coyote?.config ?? const CoyoteConfig(),
         ),
       );
     } catch (_) {
@@ -274,14 +314,16 @@ class GameCoordinator extends ChangeNotifier {
     _disposed = true;
     _timer?.cancel();
     engine.removeListener(_engineChanged);
-    ems?.removeListener(_emsChanged);
-    ems?.onFault = null;
+    output?.removeListener(_outputChanged);
+    output?.onFault = null;
     camera.removeListener(_cameraChanged);
     camera.dispose();
     engine.dispose();
-    final output = ems;
-    if (output != null) {
-      unawaited(output.disconnect().whenComplete(output.dispose));
+    final deviceOutput = output;
+    if (deviceOutput != null) {
+      unawaited(
+        deviceOutput.disconnectAll().whenComplete(deviceOutput.dispose),
+      );
     }
     unawaited(
       _wakeChanges.then((_) => _keepAwake(false)).catchError((Object _) {}),

@@ -6,6 +6,8 @@ import 'package:safety_margin/app/game_coordinator.dart';
 import 'package:safety_margin/domain/game_engine.dart';
 import 'package:safety_margin/domain/pose_sample.dart';
 import 'package:safety_margin/services/settings_store.dart';
+import 'package:safety_margin/services/coyote_device.dart';
+import 'package:safety_margin/services/coyote_transport.dart';
 import 'package:safety_margin/services/ems_device.dart';
 import 'package:safety_margin/ui/game_app.dart';
 import 'package:safety_margin/ui/app_localizations.dart';
@@ -41,6 +43,29 @@ class _WidgetEmsTransport implements EmsTransport {
     await linkController.close();
     await notificationController.close();
   }
+}
+
+class _WidgetCoyoteTransport implements CoyoteTransport {
+  final controller = StreamController<CoyoteTransportEvent>.broadcast(
+    sync: true,
+  );
+  int connects = 0;
+
+  @override
+  Stream<CoyoteTransportEvent> get events => controller.stream;
+
+  @override
+  Future<void> connect(Uri uri) async {
+    connects++;
+  }
+
+  @override
+  Future<void> send(Map<String, dynamic> frame) async {}
+
+  @override
+  Future<void> close() async {}
+
+  Future<void> dispose() => controller.close();
 }
 
 void main() {
@@ -396,6 +421,53 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
     await transport.close();
+  });
+
+  testWidgets('切换到 DG-LAB 后点击连接会显示官方配对二维码和安全控件', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final emsTransport = _WidgetEmsTransport();
+    final coyoteTransport = _WidgetCoyoteTransport();
+    final c = GameCoordinator(
+      ems: EmsDeviceController(transport: emsTransport),
+      coyote: CoyoteDeviceController(transport: coyoteTransport),
+      cameraFactory: (epoch) => FakePoseCamera(epoch),
+      store: FakeSettingsStore(),
+      keepAwake: (_) async {},
+      autoTick: false,
+    );
+    await tester.pumpWidget(SafetyMarginApp(coordinator: c));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('EMS 设备'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('DG-LAB Coyote'));
+    await tester.pumpAndSettle();
+    expect(find.text('DG-LAB Coyote 3.0'), findsOneWidget);
+    expect(find.byKey(const ValueKey('coyote_channel')), findsOneWidget);
+    expect(find.byKey(const ValueKey('coyote_waveform')), findsOneWidget);
+    expect(find.text('最大允许强度'), findsOneWidget);
+    expect(find.byKey(const ValueKey('coyote_emergency_stop')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('coyote_connect')));
+    await tester.pump();
+    expect(coyoteTransport.connects, 1);
+    coyoteTransport.controller.add(
+      const CoyoteTransportMessage({
+        'type': 'hello',
+        'clientId': 'controller-id',
+      }),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('等待扫码'), findsOneWidget);
+    expect(find.byKey(const ValueKey('coyote_qr')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await emsTransport.close();
+    await coyoteTransport.dispose();
   });
 
   testWidgets('可切换九种外语且核心文案完整显示', (tester) async {
