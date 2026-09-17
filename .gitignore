@@ -1,0 +1,71 @@
+# 系统与临时文件
+*.class
+*.log
+*.pyc
+*.swp
+*.swo
+*~
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IDE 配置
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter、Dart 与 Pub 生成文件
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# 测试与分析工具输出
+lcov.info
+*.lcov
+
+# 符号表文件
+app.*.symbols
+
+# 混淆映射文件
+app.*.map.json
+
+# 本地环境与敏感配置
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+key.properties
+
+# Android 构建产物
+/android/.gradle/
+/android/.kotlin/
+/android/build/
+/android/app/build/
+/android/**/.cxx/
+/android/**/.externalNativeBuild/
+/android/app/debug
+/android/app/profile
+/android/app/release

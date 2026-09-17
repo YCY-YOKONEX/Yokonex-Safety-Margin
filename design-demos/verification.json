@@ -1,0 +1,21 @@
+{
+  "checkedAt": "2026-09-16T04:56:21.286Z",
+  "checks": [
+    "a: four screens, assets, settings, anomaly, pause, result, restart, camera reset, two drawing modes, 320/390px layout",
+    "b: four screens, assets, settings, anomaly, pause, result, restart, camera reset, two drawing modes, 320/390px layout",
+    "c: four screens, assets, settings, anomaly, pause, result, restart, camera reset, two drawing modes, 320/390px layout"
+  ],
+  "pageErrors": [],
+  "screenshots": [
+    "a-320.png",
+    "a-390.png",
+    "a-screens.png",
+    "b-320.png",
+    "b-390.png",
+    "b-screens.png",
+    "c-320.png",
+    "c-390.png",
+    "c-screens.png",
+    "comparison.png"
+  ]
+}
