@@ -108,6 +108,50 @@ void main() {
     h.feed(const Duration(seconds: 1), TrackingStatus.outside);
     expect(h.engine.events.length, 1);
   });
+  test('触发记录侧别、恢复时间和回合统计', () {
+    final h = Harness()..start();
+    h.engine.acceptObservation(
+      TrackingStatus.outside,
+      epoch: h.engine.epoch,
+      side: TriggerSide.left,
+    );
+    h.time += const Duration(milliseconds: 100);
+    h.observe(TrackingStatus.inside);
+    h.time += const Duration(milliseconds: 400);
+    h.observe(TrackingStatus.inside);
+    final event = h.engine.events.single;
+    expect(event.side, TriggerSide.left);
+    expect(event.recoveredAt, const Duration(milliseconds: 500));
+    expect(
+      event.durationUntil(h.engine.elapsed),
+      const Duration(milliseconds: 500),
+    );
+  });
+  test('统计累计异常、最长安全时段、原因和方向', () {
+    final stats = GameSessionStats.from(const [
+      TriggerEvent(
+        sessionId: 'session',
+        sequence: 1,
+        elapsed: Duration(seconds: 2),
+        recoveredAt: Duration(seconds: 3),
+        reason: TriggerReason.outside,
+        side: TriggerSide.left,
+      ),
+      TriggerEvent(
+        sessionId: 'session',
+        sequence: 2,
+        elapsed: Duration(seconds: 6),
+        recoveredAt: Duration(seconds: 8),
+        reason: TriggerReason.absent,
+      ),
+    ], const Duration(seconds: 10));
+    expect(stats.outsideCount, 1);
+    expect(stats.absentCount, 1);
+    expect(stats.leftCount, 1);
+    expect(stats.rightCount, 0);
+    expect(stats.abnormalDuration, const Duration(seconds: 3));
+    expect(stats.longestSafeDuration, const Duration(seconds: 3));
+  });
   for (final reason in PauseReason.values) {
     test('$reason 暂停清零触发状态且暂停时间不计入游戏', () {
       final h = Harness()..start();

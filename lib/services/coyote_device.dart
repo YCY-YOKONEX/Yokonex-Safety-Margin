@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../domain/coyote_protocol.dart';
 import '../domain/game_engine.dart';
+import '../domain/pose_sample.dart';
 import 'coyote_transport.dart';
 
 enum CoyoteConnectionPhase {
@@ -155,6 +156,7 @@ class CoyoteDeviceController extends ChangeNotifier implements TriggerSink {
       _startOutput(
         intensity: _clampIntensity(config.triggerIntensity),
         duration: config.duration,
+        event: event,
       ).catchError((Object value) {
         _fail(_message(value, '郊狼输出失败'));
       }),
@@ -164,6 +166,7 @@ class CoyoteDeviceController extends ChangeNotifier implements TriggerSink {
   Future<void> _startOutput({
     required int intensity,
     required Duration duration,
+    TriggerEvent? event,
   }) async {
     final clientId = _clientId;
     final device = activeDevice;
@@ -180,7 +183,7 @@ class CoyoteDeviceController extends ChangeNotifier implements TriggerSink {
     );
     final token = ++_outputToken;
     _safetyStopTimer?.cancel();
-    final channels = _selectedChannels();
+    final channels = _selectedChannels(event);
     final frames = _framesForDuration(safeDuration);
     for (final channel in channels) {
       if (token != _outputToken) return;
@@ -222,11 +225,25 @@ class CoyoteDeviceController extends ChangeNotifier implements TriggerSink {
     config.maxIntensity.clamp(1, CoyoteConfig.protocolMaxIntensity),
   );
 
-  List<int> _selectedChannels() => switch (config.channel) {
-    CoyoteChannel.a => const [0],
-    CoyoteChannel.b => const [1],
-    CoyoteChannel.both => const [0, 1],
-  };
+  List<int> _selectedChannels(TriggerEvent? event) {
+    if (config.directionalMapping && event != null) {
+      switch (event.side) {
+        case TriggerSide.left:
+          return const [0];
+        case TriggerSide.right:
+          return const [1];
+        case TriggerSide.both:
+          return const [0, 1];
+        case TriggerSide.unknown:
+          break;
+      }
+    }
+    return switch (config.channel) {
+      CoyoteChannel.a => const [0],
+      CoyoteChannel.b => const [1],
+      CoyoteChannel.both => const [0, 1],
+    };
+  }
 
   List<String> _framesForDuration(Duration duration) {
     final source = coyoteWaveforms

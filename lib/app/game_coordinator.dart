@@ -123,9 +123,15 @@ class GameCoordinator extends ChangeNotifier {
         _foreground) {
       _lastFrame = frame;
       sample = frame.sample;
+      final status = editing
+          ? TrackingStatus.waiting
+          : frame.sample.classify(region);
       engine.acceptObservation(
-        editing ? TrackingStatus.waiting : frame.sample.classify(region),
+        status,
         epoch: frame.epoch,
+        side: status == TrackingStatus.outside
+            ? frame.sample.outsideSide(region)
+            : TriggerSide.unknown,
       );
     }
     if (camera.error != null && camera.error != _lastCameraError) {

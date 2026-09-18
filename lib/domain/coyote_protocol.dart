@@ -108,6 +108,7 @@ class CoyoteConfig {
     this.maxIntensity = 20,
     this.duration = const Duration(seconds: 1),
     this.cooldown = const Duration(seconds: 3),
+    this.directionalMapping = false,
   });
 
   static const protocolMaxIntensity = 200;
@@ -124,6 +125,7 @@ class CoyoteConfig {
   final int maxIntensity;
   final Duration duration;
   final Duration cooldown;
+  final bool directionalMapping;
 
   bool get isValid =>
       triggerIntensity >= 0 &&
@@ -142,6 +144,7 @@ class CoyoteConfig {
     int? maxIntensity,
     Duration? duration,
     Duration? cooldown,
+    bool? directionalMapping,
   }) => CoyoteConfig(
     channel: channel ?? this.channel,
     waveform: waveform ?? this.waveform,
@@ -149,6 +152,7 @@ class CoyoteConfig {
     maxIntensity: maxIntensity ?? this.maxIntensity,
     duration: duration ?? this.duration,
     cooldown: cooldown ?? this.cooldown,
+    directionalMapping: directionalMapping ?? this.directionalMapping,
   );
 
   Map<String, Object> toJson() => {
@@ -158,6 +162,7 @@ class CoyoteConfig {
     'maxIntensity': maxIntensity,
     'durationMilliseconds': duration.inMilliseconds,
     'cooldownMilliseconds': cooldown.inMilliseconds,
+    'directionalMapping': directionalMapping,
   };
 
   factory CoyoteConfig.fromJson(Map<String, dynamic> json) {
@@ -168,6 +173,7 @@ class CoyoteConfig {
       maxIntensity: json['maxIntensity'] as int,
       duration: Duration(milliseconds: json['durationMilliseconds'] as int),
       cooldown: Duration(milliseconds: json['cooldownMilliseconds'] as int),
+      directionalMapping: json['directionalMapping'] as bool? ?? false,
     );
     if (!config.isValid) throw const FormatException('郊狼参数无效');
     return config;

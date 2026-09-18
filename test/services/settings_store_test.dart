@@ -30,6 +30,7 @@ void main() {
           maxIntensity: 16,
           duration: Duration(milliseconds: 900),
           cooldown: Duration(seconds: 4),
+          directionalMapping: true,
         ),
       ),
     );
@@ -45,6 +46,7 @@ void main() {
     expect(loaded.coyoteConfig.channel, CoyoteChannel.both);
     expect(loaded.coyoteConfig.triggerIntensity, 8);
     expect(loaded.coyoteConfig.maxIntensity, 16);
+    expect(loaded.coyoteConfig.directionalMapping, isTrue);
   });
   test('连续保存按顺序完成，区域清除可以持久化', () async {
     final store = LocalSettingsStore();

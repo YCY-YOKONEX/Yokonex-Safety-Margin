@@ -35,6 +35,12 @@ void main() {
     c.start();
     expect(c.engine.phase, GamePhase.running);
   });
+  test('现有姿态帧将左侧越界信息送入触发事件', () {
+    camera.emit(fullPose());
+    c.start();
+    camera.emit(fullPose(outside: true));
+    expect(c.engine.events.single.side, TriggerSide.left);
+  });
   test('切换摄像头清空区域并保存', () async {
     camera.emit(fullPose());
     await c.switchCamera();

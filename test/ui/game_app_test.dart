@@ -184,6 +184,39 @@ void main() {
     expect(c.engine.phase, GamePhase.running);
   });
 
+  testWidgets('结果页显示异常统计、方向和触发时间轴', (tester) async {
+    late FakePoseCamera camera;
+    final c = GameCoordinator(
+      cameraFactory: (readEpoch) => camera = FakePoseCamera(readEpoch),
+      store: FakeSettingsStore(
+        SavedSetup(
+          config: const GameConfig(startCountdown: Duration.zero),
+          region: testRegion(),
+          cameraId: 'front',
+        ),
+      ),
+      keepAwake: (_) async {},
+      autoTick: false,
+    );
+    await tester.pumpWidget(SafetyMarginApp(coordinator: c));
+    await tester.pumpAndSettle();
+    camera.emit(fullPose());
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('start_game')));
+    await tester.pumpAndSettle();
+    camera.emit(fullPose(outside: true));
+    await tester.pump();
+    c.finish();
+    await tester.pumpAndSettle();
+
+    expect(find.text('异常累计'), findsOneWidget);
+    expect(find.text('最长安全时段'), findsOneWidget);
+    expect(find.text('左侧 · 持续 00:00'), findsOneWidget);
+    expect(find.text('越界 1 · 离开 0'), findsOneWidget);
+    expect(find.text('左 1 · 右 0 · 双侧 0'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('越界或跟踪异常时显示屏幕四周红光，恢复后消失', (tester) async {
     late FakePoseCamera camera;
     final c = GameCoordinator(
@@ -462,6 +495,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('等待扫码'), findsOneWidget);
     expect(find.byKey(const ValueKey('coyote_qr')), findsOneWidget);
+    expect(find.byKey(const ValueKey('coyote_open_app')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('coyote_directional_mapping')),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox());

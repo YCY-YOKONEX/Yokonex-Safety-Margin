@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app/game_coordinator.dart';
 import '../domain/activity_region.dart';
@@ -1529,6 +1530,25 @@ class _CoyoteSettingsSheetState extends State<_CoyoteSettingsSheet> {
     }
   }
 
+  Future<void> _openOnThisDevice() async {
+    final pairingUrl = device.pairingUrl;
+    if (pairingUrl == null) return;
+    try {
+      final opened = await launchUrl(
+        Uri.parse(pairingUrl),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!opened) throw StateError('无法打开 DG-LAB App');
+    } on Object catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.toString().replaceFirst('Bad state: ', '')),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final connectedDevice = device.activeDevice;
@@ -1588,6 +1608,13 @@ class _CoyoteSettingsSheetState extends State<_CoyoteSettingsSheet> {
               '使用 DG-LAB 官方 App 扫描二维码',
               textAlign: TextAlign.center,
               style: TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              key: const ValueKey('coyote_open_app'),
+              onPressed: _openOnThisDevice,
+              icon: const Icon(Icons.open_in_new),
+              label: const Text('在本机 DG-LAB App 中连接'),
             ),
           ],
           const SizedBox(height: 14),
@@ -1661,6 +1688,16 @@ class _CoyoteSettingsSheetState extends State<_CoyoteSettingsSheet> {
             onSelectionChanged: (selection) => setState(
               () => _config = _config.copyWith(channel: selection.first),
             ),
+          ),
+          SwitchListTile(
+            key: const ValueKey('coyote_directional_mapping'),
+            contentPadding: EdgeInsets.zero,
+            value: _config.directionalMapping,
+            onChanged: (value) => setState(
+              () => _config = _config.copyWith(directionalMapping: value),
+            ),
+            title: const Text('按越界侧映射 A/B'),
+            subtitle: const Text('身体左侧触发 A，右侧触发 B；无法判断时使用上方通道'),
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<CoyoteWaveform>(
@@ -1820,107 +1857,162 @@ class _Results extends StatelessWidget {
   const _Results({required this.c});
   final GameCoordinator c;
 
+  String _sideLabel(BuildContext context, TriggerSide side) => switch (side) {
+    TriggerSide.left => context.l10n.text('左侧'),
+    TriggerSide.right => context.l10n.text('右侧'),
+    TriggerSide.both => context.l10n.text('双侧'),
+    TriggerSide.unknown => '',
+  };
+
   @override
-  Widget build(BuildContext context) => Center(
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 540),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 24, 24, 28),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(
-                  Icons.flag_outlined,
-                  size: 34,
-                  color: AppColors.green,
-                ),
-                const SizedBox(height: 18),
-                Text(
-                  context.l10n.text('游戏结束'),
-                  style: Theme.of(context).textTheme.headlineLarge,
-                ),
-                const SizedBox(height: 24),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _Metric(
-                        label: context.l10n.text('实际游戏时长'),
-                        value: formatDuration(c.engine.elapsed),
-                      ),
-                    ),
-                    Expanded(
-                      child: _Metric(
-                        label: context.l10n.text('模拟触发次数'),
-                        value: '${c.engine.events.length}',
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 18, 24, 10),
-            child: Text(
-              context.l10n.text('触发记录'),
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-          ),
-          Expanded(
-            child: c.engine.events.isEmpty
-                ? Center(
-                    child: Text(
-                      context.l10n.text('本局没有触发记录'),
-                      style: const TextStyle(color: AppColors.muted),
-                    ),
-                  )
-                : ListView.separated(
-                    itemCount: c.engine.events.length,
-                    separatorBuilder: (_, _) =>
-                        const Divider(height: 1, indent: 24, endIndent: 24),
-                    itemBuilder: (context, index) {
-                      final event = c.engine.events[index];
-                      return ListTile(
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                        ),
-                        leading: Text(
-                          '${event.sequence}'.padLeft(2, '0'),
-                          style: const TextStyle(color: AppColors.muted),
-                        ),
-                        title: Text(
-                          context.l10n.text(
-                            event.reason == TriggerReason.outside
-                                ? '关节越界'
-                                : '离开画面',
-                          ),
-                        ),
-                        trailing: Text(
-                          formatDuration(event.elapsed),
-                          style: const TextStyle(
-                            fontFeatures: [FontFeature.tabularFigures()],
-                          ),
-                        ),
-                      );
-                    },
+  Widget build(BuildContext context) {
+    final stats = c.engine.stats;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 540),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 24, 24, 28),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.flag_outlined,
+                    size: 34,
+                    color: AppColors.green,
                   ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-            child: FilledButton.icon(
-              onPressed: c.playAgain,
-              icon: const Icon(Icons.replay),
-              label: Text(context.l10n.text('再来一局')),
+                  const SizedBox(height: 18),
+                  Text(
+                    context.l10n.text('游戏结束'),
+                    style: Theme.of(context).textTheme.headlineLarge,
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _Metric(
+                          label: context.l10n.text('实际游戏时长'),
+                          value: formatDuration(c.engine.elapsed),
+                        ),
+                      ),
+                      Expanded(
+                        child: _Metric(
+                          label: context.l10n.text('模拟触发次数'),
+                          value: '${c.engine.events.length}',
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _Metric(
+                          label: context.l10n.text('异常累计'),
+                          value: formatDuration(stats.abnormalDuration),
+                        ),
+                      ),
+                      Expanded(
+                        child: _Metric(
+                          label: context.l10n.text('最长安全时段'),
+                          value: formatDuration(stats.longestSafeDuration),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    context.l10n.text('越界 {outside} · 离开 {absent}', {
+                      'outside': stats.outsideCount,
+                      'absent': stats.absentCount,
+                    }),
+                    style: const TextStyle(color: AppColors.muted),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    context.l10n.text('左 {left} · 右 {right} · 双侧 {both}', {
+                      'left': stats.leftCount,
+                      'right': stats.rightCount,
+                      'both': stats.bothCount,
+                    }),
+                    style: const TextStyle(color: AppColors.muted),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 18, 24, 10),
+              child: Text(
+                context.l10n.text('触发记录'),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            Expanded(
+              child: c.engine.events.isEmpty
+                  ? Center(
+                      child: Text(
+                        context.l10n.text('本局没有触发记录'),
+                        style: const TextStyle(color: AppColors.muted),
+                      ),
+                    )
+                  : ListView.separated(
+                      itemCount: c.engine.events.length,
+                      separatorBuilder: (_, _) =>
+                          const Divider(height: 1, indent: 24, endIndent: 24),
+                      itemBuilder: (context, index) {
+                        final event = c.engine.events[index];
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                          ),
+                          leading: Text(
+                            '${event.sequence}'.padLeft(2, '0'),
+                            style: const TextStyle(color: AppColors.muted),
+                          ),
+                          title: Text(
+                            context.l10n.text(
+                              event.reason == TriggerReason.outside
+                                  ? '关节越界'
+                                  : '离开画面',
+                            ),
+                          ),
+                          subtitle: Text(
+                            [
+                              if (_sideLabel(context, event.side).isNotEmpty)
+                                _sideLabel(context, event.side),
+                              context.l10n.text('持续 {duration}', {
+                                'duration': formatDuration(
+                                  event.durationUntil(c.engine.elapsed),
+                                ),
+                              }),
+                            ].join(' · '),
+                          ),
+                          trailing: Text(
+                            formatDuration(event.elapsed),
+                            style: const TextStyle(
+                              fontFeatures: [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+              child: FilledButton.icon(
+                onPressed: c.playAgain,
+                icon: const Icon(Icons.replay),
+                label: Text(context.l10n.text('再来一局')),
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 String formatDuration(Duration duration, {bool roundUp = false}) {
