@@ -297,6 +297,13 @@ void main() {
     await tester.pumpAndSettle();
 
     final canvas = find.byKey(const ValueKey('custom_pose_canvas'));
+    expect(
+      find.byKey(const ValueKey('custom_pose_live_status')),
+      findsOneWidget,
+    );
+    expect(find.text('姿势已对齐'), findsOneWidget);
+    expect(find.text('姿势预览不会触发设备输出'), findsOneWidget);
+    expect(c.engine.events, isEmpty);
     final rect = tester.getRect(canvas);
     final before =
         c.engine.config.customPoseSettings.template.points[Joint.nose]!;
@@ -305,8 +312,11 @@ void main() {
         rect.left + rect.width * before.dx,
         rect.top + rect.height * before.dy,
       ),
-      const Offset(30, 0),
+      const Offset(60, 0),
     );
+    await tester.pump();
+    expect(find.textContaining('调整姿势'), findsOneWidget);
+    expect(c.engine.events, isEmpty);
     final grace = tester.widget<Slider>(
       find.byKey(const ValueKey('custom_pose_grace')),
     );
@@ -321,6 +331,7 @@ void main() {
     expect(saved.mismatchGrace, const Duration(seconds: 5));
     expect(saved.template.points[Joint.nose], isNot(before));
     expect(store.setup.config.customPoseSettings.mismatchGrace.inSeconds, 5);
+    expect(c.engine.events, isEmpty);
     expect(tester.takeException(), isNull);
   });
 

@@ -200,6 +200,22 @@ class CustomPoseSettings {
   }
 }
 
+Map<Joint, bool> customPoseJointMatches(
+  PoseSample sample,
+  CustomPoseTemplate template,
+) => Map.unmodifiable({
+  for (final joint in customPoseJoints)
+    joint:
+        sample.personDetected &&
+        (sample.landmarks[joint]?.isReliable ?? false) &&
+        (sample.landmarks[joint]!.position - template.points[joint]!)
+                .distance <=
+            CustomPoseSettings.tolerance,
+});
+
+bool customPoseMatches(PoseSample sample, CustomPoseTemplate template) =>
+    customPoseJointMatches(sample, template).values.every((matches) => matches);
+
 enum PoseChallenge {
   raiseLeftHand,
   raiseRightHand,
@@ -470,14 +486,12 @@ class GameModeSession {
   ModeObservation _customPoseObservation(PoseSample sample, Duration elapsed) {
     var left = false;
     var right = false;
-    var matches = sample.personDetected;
+    final jointMatches = customPoseJointMatches(
+      sample,
+      customPoseSettings.template,
+    );
     for (final joint in customPoseJoints) {
-      final actual = sample.landmarks[joint];
-      final target = customPoseSettings.template.points[joint]!;
-      if (actual == null ||
-          !actual.isReliable ||
-          (actual.position - target).distance > CustomPoseSettings.tolerance) {
-        matches = false;
+      if (!jointMatches[joint]!) {
         if (leftMonitoredJoints.contains(joint)) left = true;
         if (rightMonitoredJoints.contains(joint)) right = true;
         if (joint == Joint.nose) {
@@ -486,7 +500,7 @@ class GameModeSession {
         }
       }
     }
-    if (matches) {
+    if (jointMatches.values.every((matches) => matches)) {
       _customMismatchStarted = null;
       return const ModeObservation(TrackingStatus.inside);
     }

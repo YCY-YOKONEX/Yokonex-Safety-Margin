@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:camera/camera.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -297,8 +298,10 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
       case SafetyGameMode.customPose:
         final result = await Navigator.of(context).push<CustomPoseSettings>(
           MaterialPageRoute(
-            builder: (_) =>
-                _CustomPoseEditor(settings: c.engine.config.customPoseSettings),
+            builder: (_) => _CustomPoseEditor(
+              settings: c.engine.config.customPoseSettings,
+              coordinator: c,
+            ),
           ),
         );
         if (mounted && result != null) c.updateCustomPoseSettings(result);
@@ -1081,8 +1084,9 @@ class _SecondsSlider extends StatelessWidget {
 }
 
 class _CustomPoseEditor extends StatefulWidget {
-  const _CustomPoseEditor({required this.settings});
+  const _CustomPoseEditor({required this.settings, required this.coordinator});
   final CustomPoseSettings settings;
+  final GameCoordinator coordinator;
 
   @override
   State<_CustomPoseEditor> createState() => _CustomPoseEditorState();
@@ -1091,16 +1095,55 @@ class _CustomPoseEditor extends StatefulWidget {
 class _CustomPoseEditorState extends State<_CustomPoseEditor> {
   late CustomPoseTemplate _template = widget.settings.template;
   late int _graceSeconds = widget.settings.mismatchGrace.inSeconds;
+  final Stopwatch _previewClock = Stopwatch()..start();
+  Duration? _mismatchStarted;
   Joint? _dragging;
 
-  void _startDrag(Offset local, Size size) {
+  GameCoordinator get c => widget.coordinator;
+
+  @override
+  void initState() {
+    super.initState();
+    c.addListener(_previewChanged);
+    _syncMismatchTimer();
+  }
+
+  @override
+  void dispose() {
+    c.removeListener(_previewChanged);
+    super.dispose();
+  }
+
+  void _previewChanged() {
+    if (!mounted) return;
+    _syncMismatchTimer();
+    setState(() {});
+  }
+
+  void _syncMismatchTimer() {
+    final sample = c.sample;
+    if (sample == null || customPoseMatches(sample, _template)) {
+      _mismatchStarted = null;
+    } else {
+      _mismatchStarted ??= _previewClock.elapsed;
+    }
+  }
+
+  int get _remainingSeconds {
+    final started = _mismatchStarted;
+    if (started == null) return _graceSeconds;
+    final remaining =
+        (_graceSeconds * 1000 -
+                (_previewClock.elapsed - started).inMilliseconds)
+            .clamp(0, _graceSeconds * 1000);
+    return (remaining + 999) ~/ 1000;
+  }
+
+  void _startDrag(Offset local, PreviewTransform transform) {
     Joint? nearest;
     var distance = double.infinity;
     for (final joint in customPoseJoints) {
-      final point = Offset(
-        _template.points[joint]!.dx * size.width,
-        _template.points[joint]!.dy * size.height,
-      );
+      final point = transform.toViewport(_template.points[joint]!);
       final current = (point - local).distance;
       if (current < distance) {
         nearest = joint;
@@ -1110,15 +1153,29 @@ class _CustomPoseEditorState extends State<_CustomPoseEditor> {
     if (distance <= 36) setState(() => _dragging = nearest);
   }
 
-  void _drag(Offset local, Size size) {
+  void _drag(Offset local, PreviewTransform transform) {
     final joint = _dragging;
-    if (joint == null || size.isEmpty) return;
-    setState(
-      () => _template = _template.move(
-        joint,
-        Offset(local.dx / size.width, local.dy / size.height),
-      ),
+    if (joint == null || transform.viewport.isEmpty) return;
+    setState(() {
+      _template = _template.move(joint, transform.fromViewport(local));
+      _syncMismatchTimer();
+    });
+  }
+
+  String _previewStatus(BuildContext context) {
+    final sample = c.sample;
+    if (sample == null) return context.l10n.text('等待人体识别');
+    if (!sample.personDetected) return context.l10n.text('请进入画面');
+    final complete = customPoseJoints.every(
+      (joint) => sample.landmarks[joint]?.isReliable ?? false,
     );
+    if (customPoseMatches(sample, _template)) {
+      return context.l10n.text('姿势已对齐');
+    }
+    if (!complete) return context.l10n.text('身体识别不完整');
+    return context.l10n.text('调整姿势 · {seconds} 秒后触发', {
+      'seconds': _remainingSeconds,
+    });
   }
 
   @override
@@ -1129,8 +1186,10 @@ class _CustomPoseEditorState extends State<_CustomPoseEditor> {
         IconButton(
           key: const ValueKey('reset_custom_pose'),
           tooltip: context.l10n.text('恢复默认姿势'),
-          onPressed: () =>
-              setState(() => _template = CustomPoseTemplate.standard),
+          onPressed: () => setState(() {
+            _template = CustomPoseTemplate.standard;
+            _syncMismatchTimer();
+          }),
           icon: const Icon(Icons.restart_alt),
         ),
       ],
@@ -1145,6 +1204,25 @@ class _CustomPoseEditorState extends State<_CustomPoseEditor> {
               context.l10n.text('拖动头、肩、肘、腕、髋、膝和脚踝关节点'),
               style: const TextStyle(color: AppColors.muted),
             ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 14,
+              runSpacing: 6,
+              children: [
+                _PoseLegend(
+                  color: AppColors.yellow,
+                  label: context.l10n.text('目标姿势'),
+                ),
+                _PoseLegend(
+                  color: AppColors.aligned,
+                  label: context.l10n.text('已对齐'),
+                ),
+                _PoseLegend(
+                  color: AppColors.alert,
+                  label: context.l10n.text('需调整'),
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
             AspectRatio(
               aspectRatio: 3 / 4,
@@ -1155,34 +1233,130 @@ class _CustomPoseEditorState extends State<_CustomPoseEditor> {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: LayoutBuilder(
-                  builder: (context, constraints) => RawGestureDetector(
-                    gestures: {
-                      EagerGestureRecognizer:
-                          GestureRecognizerFactoryWithHandlers<
-                            EagerGestureRecognizer
-                          >(EagerGestureRecognizer.new, (_) {}),
-                    },
-                    child: Listener(
-                      key: const ValueKey('custom_pose_canvas'),
-                      behavior: HitTestBehavior.opaque,
-                      onPointerDown: (details) => _startDrag(
-                        details.localPosition,
-                        constraints.biggest,
+                  builder: (context, constraints) {
+                    final camera = c.camera;
+                    final transform = PreviewTransform(
+                      imageSize: camera.imageSize,
+                      viewport: constraints.biggest,
+                      mirrored: camera.mirrored,
+                    );
+                    final controller = camera.previewController;
+                    final sample = c.sample;
+                    final matches = sample == null
+                        ? const <Joint, bool>{}
+                        : customPoseJointMatches(sample, _template);
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(5),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          const ColoredBox(color: AppColors.camera),
+                          if (controller != null &&
+                              controller.value.isInitialized)
+                            FittedBox(
+                              fit: BoxFit.cover,
+                              child: SizedBox(
+                                width: camera.imageSize.width,
+                                height: camera.imageSize.height,
+                                child: CameraPreview(controller),
+                              ),
+                            ),
+                          RawGestureDetector(
+                            gestures: {
+                              EagerGestureRecognizer:
+                                  GestureRecognizerFactoryWithHandlers<
+                                    EagerGestureRecognizer
+                                  >(EagerGestureRecognizer.new, (_) {}),
+                            },
+                            child: Listener(
+                              key: const ValueKey('custom_pose_canvas'),
+                              behavior: HitTestBehavior.opaque,
+                              onPointerDown: (details) =>
+                                  _startDrag(details.localPosition, transform),
+                              onPointerMove: (details) =>
+                                  _drag(details.localPosition, transform),
+                              onPointerUp: (_) =>
+                                  setState(() => _dragging = null),
+                              onPointerCancel: (_) =>
+                                  setState(() => _dragging = null),
+                              child: CustomPaint(
+                                painter: _CustomPoseEditorPainter(
+                                  transform: transform,
+                                  template: _template,
+                                  sample: sample,
+                                  matches: matches,
+                                  selected: _dragging,
+                                ),
+                              ),
+                            ),
+                          ),
+                          if (camera.initializing || c.loading)
+                            const Center(
+                              child: CircularProgressIndicator(
+                                color: AppColors.yellow,
+                              ),
+                            ),
+                          if (camera.error != null)
+                            IgnorePointer(
+                              child: Center(
+                                child: Container(
+                                  margin: const EdgeInsets.all(24),
+                                  padding: const EdgeInsets.all(12),
+                                  color: AppColors.panel.withValues(alpha: .9),
+                                  child: Text(
+                                    context.l10n.message(camera.error!),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          Positioned(
+                            left: 10,
+                            right: 10,
+                            bottom: 10,
+                            child: IgnorePointer(
+                              child: Container(
+                                key: const ValueKey('custom_pose_live_status'),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 7,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: AppColors.paper.withValues(alpha: .84),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  _previewStatus(context),
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      onPointerMove: (details) =>
-                          _drag(details.localPosition, constraints.biggest),
-                      onPointerUp: (_) => setState(() => _dragging = null),
-                      onPointerCancel: (_) => setState(() => _dragging = null),
-                      child: CustomPaint(
-                        painter: _CustomPoseEditorPainter(
-                          template: _template,
-                          selected: _dragging,
-                        ),
-                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Icon(Icons.shield_outlined, size: 16),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    context.l10n.text('姿势预览不会触发设备输出'),
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 12,
                     ),
                   ),
                 ),
-              ),
+              ],
             ),
             const SizedBox(height: 20),
             Text(
@@ -1226,40 +1400,104 @@ class _CustomPoseEditorState extends State<_CustomPoseEditor> {
   );
 }
 
+class _PoseLegend extends StatelessWidget {
+  const _PoseLegend({required this.color, required this.label});
+  final Color color;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: 9,
+        height: 9,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      ),
+      const SizedBox(width: 5),
+      Text(label, style: const TextStyle(fontSize: 12)),
+    ],
+  );
+}
+
 class _CustomPoseEditorPainter extends CustomPainter {
-  const _CustomPoseEditorPainter({required this.template, this.selected});
+  const _CustomPoseEditorPainter({
+    required this.transform,
+    required this.template,
+    required this.sample,
+    required this.matches,
+    this.selected,
+  });
+  final PreviewTransform transform;
   final CustomPoseTemplate template;
+  final PoseSample? sample;
+  final Map<Joint, bool> matches;
   final Joint? selected;
 
-  Offset point(Joint joint, Size size) => Offset(
-    template.points[joint]!.dx * size.width,
-    template.points[joint]!.dy * size.height,
-  );
+  Offset point(Joint joint) => transform.toViewport(template.points[joint]!);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final linePaint = Paint()
-      ..color = AppColors.cyan
+    final targetPaint = Paint()
+      ..color = AppColors.yellow.withValues(alpha: .82)
       ..strokeWidth = 5
       ..strokeCap = StrokeCap.round;
     for (final edge in customPoseEdges) {
-      canvas.drawLine(point(edge.$1, size), point(edge.$2, size), linePaint);
+      canvas.drawLine(point(edge.$1), point(edge.$2), targetPaint);
     }
+
+    final current = sample;
+    if (current != null && current.personDetected) {
+      for (final edge in customPoseEdges) {
+        final a = current.landmarks[edge.$1];
+        final b = current.landmarks[edge.$2];
+        if (a == null || b == null || !a.isReliable || !b.isReliable) continue;
+        final aligned =
+            (matches[edge.$1] ?? false) && (matches[edge.$2] ?? false);
+        canvas.drawLine(
+          transform.toViewport(a.position),
+          transform.toViewport(b.position),
+          Paint()
+            ..color = aligned ? AppColors.aligned : AppColors.alert
+            ..strokeWidth = 3
+            ..strokeCap = StrokeCap.round,
+        );
+      }
+      for (final joint in customPoseJoints) {
+        final actual = current.landmarks[joint];
+        if (actual == null || !actual.isReliable) continue;
+        canvas.drawCircle(
+          transform.toViewport(actual.position),
+          6,
+          Paint()
+            ..color = matches[joint] ?? false
+                ? AppColors.aligned
+                : AppColors.alert,
+        );
+      }
+    }
+
     for (final joint in customPoseJoints) {
-      final center = point(joint, size);
+      final center = point(joint);
       final radius = joint == Joint.nose ? 22.0 : 10.0;
       canvas.drawCircle(
         center,
         radius,
         Paint()
-          ..color = joint == selected ? AppColors.yellow : AppColors.paper
+          ..color = joint == selected
+              ? AppColors.ink
+              : AppColors.paper.withValues(alpha: .66)
           ..style = PaintingStyle.fill,
       );
       canvas.drawCircle(
         center,
         radius,
         Paint()
-          ..color = joint == selected ? AppColors.yellow : AppColors.cyan
+          ..color = joint == selected
+              ? AppColors.ink
+              : matches[joint] ?? false
+              ? AppColors.aligned
+              : AppColors.yellow
           ..style = PaintingStyle.stroke
           ..strokeWidth = 3,
       );
@@ -1268,7 +1506,11 @@ class _CustomPoseEditorPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _CustomPoseEditorPainter oldDelegate) =>
-      oldDelegate.template != template || oldDelegate.selected != selected;
+      oldDelegate.template != template ||
+      oldDelegate.sample != sample ||
+      oldDelegate.matches != matches ||
+      oldDelegate.transform != transform ||
+      oldDelegate.selected != selected;
 }
 
 class _SetupSummary extends StatelessWidget {

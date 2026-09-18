@@ -232,6 +232,7 @@ void main() {
       for (final entry in settings.template.points.entries)
         entry.key: Landmark(entry.value, .95),
     });
+    expect(customPoseMatches(targetPose(), settings.template), isTrue);
     expect(
       session
           .evaluate(
@@ -247,6 +248,11 @@ void main() {
       ...targetPose().landmarks,
       Joint.leftWrist: const Landmark(Offset(.05, .05), .95),
     });
+    expect(customPoseMatches(wrong, settings.template), isFalse);
+    expect(
+      customPoseJointMatches(wrong, settings.template)[Joint.leftWrist],
+      isFalse,
+    );
     expect(
       session
           .evaluate(wrong, null, Duration.zero, const Duration(minutes: 1))
