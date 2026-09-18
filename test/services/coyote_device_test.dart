@@ -333,6 +333,38 @@ void main() {
     expect(await emitFor(TriggerSide.unknown), {1});
   });
 
+  test('双区事件即使关闭普通方向映射也强制送到对应通道', () async {
+    device.configure(
+      const CoyoteConfig(
+        channel: CoyoteChannel.b,
+        triggerIntensity: 5,
+        maxIntensity: 10,
+        directionalMapping: false,
+      ),
+    );
+    await _pair(device, transport);
+    transport.sent.clear();
+    device.emit(
+      const TriggerEvent(
+        sessionId: 'dual-zone',
+        sequence: 1,
+        elapsed: Duration.zero,
+        reason: TriggerReason.wrongZone,
+        side: TriggerSide.left,
+        forceDirectional: true,
+      ),
+    );
+    await _flush();
+    final channels = transport.sent
+        .map(_rpc)
+        .where((value) => value['m'] == 'device.op')
+        .map((value) => value['data'] as Map<String, dynamic>)
+        .where((value) => value['t'] == 4)
+        .map((value) => value['c'] as int)
+        .toSet();
+    expect(channels, {0});
+  });
+
   test('Safety event 映射 A+B，统一 clamp 并对连续事件 cooldown', () async {
     device.configure(
       const CoyoteConfig(

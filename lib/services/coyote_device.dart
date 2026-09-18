@@ -226,7 +226,8 @@ class CoyoteDeviceController extends ChangeNotifier implements TriggerSink {
   );
 
   List<int> _selectedChannels(TriggerEvent? event) {
-    if (config.directionalMapping && event != null) {
+    if (event != null &&
+        (config.directionalMapping || event.forceDirectional)) {
       switch (event.side) {
         case TriggerSide.left:
           return const [0];

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../app/game_coordinator.dart';
 import '../domain/activity_region.dart';
 import '../domain/game_engine.dart';
+import '../domain/game_mode.dart';
 import 'app_localizations.dart';
 import 'app_theme.dart';
 
@@ -97,7 +98,10 @@ class _CameraStageState extends State<CameraStage> {
   Widget build(BuildContext context) {
     final camera = c.camera;
     final editable =
-        c.engine.phase == GamePhase.ready && camera.ready && !c.loading;
+        c.engine.phase == GamePhase.ready &&
+        c.engine.config.mode.requiresRegion &&
+        camera.ready &&
+        !c.loading;
     return AspectRatio(
       aspectRatio: 3 / 4,
       child: ClipRect(
@@ -156,7 +160,11 @@ class _CameraStageState extends State<CameraStage> {
                       child: CustomPaint(
                         painter: PoseOverlayPainter(
                           transform: transform,
-                          region: c.editing ? _draft ?? c.region : c.region,
+                          region: c.editing
+                              ? _draft ?? c.region
+                              : c.displayRegion,
+                          obstacle: c.obstacle,
+                          dualZones: c.dualZones,
                           stroke: _drawing && c.editing ? _stroke : const [],
                           mode: c.drawingMode,
                           showHandles:
@@ -265,12 +273,16 @@ class PoseOverlayPainter extends CustomPainter {
   PoseOverlayPainter({
     required this.transform,
     required this.region,
+    this.obstacle,
+    this.dualZones,
     this.stroke = const [],
     this.mode = RegionMode.freehand,
     this.showHandles = false,
   });
   final PreviewTransform transform;
   final ActivityRegion? region;
+  final Rect? obstacle;
+  final (ActivityRegion, ActivityRegion)? dualZones;
   final List<Offset> stroke;
   final RegionMode mode;
   final bool showHandles;
@@ -377,6 +389,41 @@ class PoseOverlayPainter extends CustomPainter {
         }
       }
     }
+    if (dualZones case final zones?) {
+      _paintZone(canvas, zones.$1, 'A', AppColors.cyan);
+      _paintZone(canvas, zones.$2, 'B', AppColors.yellow);
+    }
+    if (obstacle case final rect?) {
+      final viewportRect = Rect.fromPoints(
+        transform.toViewport(rect.topLeft),
+        transform.toViewport(rect.bottomRight),
+      );
+      canvas.drawRect(
+        viewportRect,
+        Paint()..color = AppColors.alert.withValues(alpha: .24),
+      );
+      canvas.drawRect(
+        viewportRect,
+        Paint()
+          ..color = AppColors.alert
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3,
+      );
+      canvas.drawLine(
+        viewportRect.topLeft,
+        viewportRect.bottomRight,
+        Paint()
+          ..color = AppColors.alert
+          ..strokeWidth = 2,
+      );
+      canvas.drawLine(
+        viewportRect.topRight,
+        viewportRect.bottomLeft,
+        Paint()
+          ..color = AppColors.alert
+          ..strokeWidth = 2,
+      );
+    }
     if (stroke.isNotEmpty) {
       final path = mode == RegionMode.rectangle && stroke.length == 2
           ? (Path()..addRect(
@@ -394,6 +441,39 @@ class PoseOverlayPainter extends CustomPainter {
           ..strokeWidth = 2,
       );
     }
+  }
+
+  void _paintZone(
+    Canvas canvas,
+    ActivityRegion zone,
+    String label,
+    Color color,
+  ) {
+    final path = _path(zone.points);
+    canvas.drawPath(path, Paint()..color = color.withValues(alpha: .10));
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color.withValues(alpha: .85)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+    final painter = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          color: color,
+          fontSize: 22,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final center = transform.toViewport(zone.bounds.center);
+    painter.paint(
+      canvas,
+      center - Offset(painter.width / 2, painter.height / 2),
+    );
   }
 
   @override

@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:safety_margin/domain/game_engine.dart';
+import 'package:safety_margin/domain/game_mode.dart';
 import 'package:safety_margin/domain/coyote_protocol.dart';
 import 'package:safety_margin/domain/ems_protocol.dart';
 import 'package:safety_margin/services/output_device.dart';
@@ -14,7 +15,10 @@ void main() {
     final store = LocalSettingsStore();
     await store.save(
       SavedSetup(
-        config: const GameConfig(duration: Duration(minutes: 2)),
+        config: const GameConfig(
+          duration: Duration(minutes: 2),
+          mode: SafetyGameMode.combo,
+        ),
         region: testRegion(),
         cameraId: 'front',
         emsConfig: const EmsConfig(
@@ -36,6 +40,7 @@ void main() {
     );
     final loaded = await store.load();
     expect(loaded.config.duration, const Duration(minutes: 2));
+    expect(loaded.config.mode, SafetyGameMode.combo);
     expect(loaded.region!.points, testRegion().points);
     expect(loaded.cameraId, 'front');
     expect(loaded.emsConfig.generation, EmsGeneration.first);

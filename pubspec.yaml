@@ -1,7 +1,7 @@
 name: safety_margin
 description: "单人人体骨骼区域游戏"
 publish_to: none
-version: 0.1.3+4
+version: 0.2.0+5
 
 environment:
   sdk: ^3.12.1

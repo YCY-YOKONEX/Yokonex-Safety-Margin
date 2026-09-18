@@ -13,6 +13,7 @@ import '../domain/coyote_protocol.dart';
 import '../domain/ems_protocol.dart';
 import '../domain/ems_waveform.dart';
 import '../domain/game_engine.dart';
+import '../domain/game_mode.dart';
 import '../domain/pose_sample.dart';
 import '../services/ems_device.dart';
 import '../services/coyote_device.dart';
@@ -125,7 +126,10 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
   final _tickPlayer = AudioPlayer();
   final _goPlayer = AudioPlayer();
   final _alertPlayer = AudioPlayer();
+  final _modePlayer = AudioPlayer();
   int _lastEventCount = 0;
+  bool _modeAudioActive = false;
+  int _modeAudioToken = 0;
 
   bool get _counting => _countdownRemaining != null;
 
@@ -151,6 +155,7 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
 
   void _changed() {
     if (!mounted) return;
+    unawaited(_syncModeAudio());
     final eventCount = c.engine.events.length;
     // 每次新触发（越界/跟踪不完整/画面中无人）都提醒一次，与设备持续输出解耦。
     if (eventCount > _lastEventCount) {
@@ -170,6 +175,28 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
     setState(() {});
   }
 
+  Future<void> _syncModeAudio() async {
+    final shouldPlay =
+        c.engine.phase == GamePhase.running &&
+        c.engine.config.mode == SafetyGameMode.redLightGreenLight &&
+        c.modeSession.isGreenLight(c.engine.elapsed);
+    if (shouldPlay == _modeAudioActive) return;
+    _modeAudioActive = shouldPlay;
+    final token = ++_modeAudioToken;
+    try {
+      if (shouldPlay) {
+        await _modePlayer.setReleaseMode(ReleaseMode.loop);
+        await _modePlayer.setVolume(.32);
+        if (token != _modeAudioToken || !_modeAudioActive) return;
+        await _modePlayer.play(AssetSource('sounds/game_move.wav'));
+      } else {
+        await _modePlayer.stop();
+      }
+    } on Object {
+      // 音频提示不可用时，画面状态仍提供完整的红绿灯判定。
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     unawaited(c.setForeground(state == AppLifecycleState.resumed));
@@ -184,6 +211,7 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
     unawaited(_tickPlayer.dispose());
     unawaited(_goPlayer.dispose());
     unawaited(_alertPlayer.dispose());
+    unawaited(_modePlayer.dispose());
     super.dispose();
   }
 
@@ -364,6 +392,19 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
                                               child: _TrackingBar(c: c),
                                             ),
                                           ),
+                                        if (c.engine.phase ==
+                                                GamePhase.running &&
+                                            c.engine.config.mode ==
+                                                SafetyGameMode.combo &&
+                                            c.modeSession.combo > 0)
+                                          Positioned(
+                                            left: 16,
+                                            right: 16,
+                                            bottom: 16,
+                                            child: _ComboBurst(
+                                              combo: c.modeSession.combo,
+                                            ),
+                                          ),
                                         if (ready && !_counting)
                                           Positioned(
                                             right: 12,
@@ -400,7 +441,9 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
                                     ),
                                   ),
                                 ),
-                                if (ready)
+                                if (ready && !_counting) _ModeSelector(c: c),
+                                if (ready &&
+                                    c.engine.config.mode.requiresRegion)
                                   _PreparationBar(c: c, enabled: !_counting),
                                 if (ready)
                                   _SetupSummary(
@@ -417,6 +460,7 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
                                                   .engine
                                                   .config
                                                   .startCountdown,
+                                              mode: c.engine.config.mode,
                                             ),
                                           ),
                                   )
@@ -564,6 +608,43 @@ class _EventAlertGlowPainter extends CustomPainter {
   bool shouldRepaint(covariant _EventAlertGlowPainter oldDelegate) => false;
 }
 
+class _ComboBurst extends StatelessWidget {
+  const _ComboBurst({required this.combo});
+  final int combo;
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+    child: AnimatedSwitcher(
+      duration: const Duration(milliseconds: 260),
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: ScaleTransition(scale: animation, child: child),
+      ),
+      child: Center(
+        key: ValueKey(combo),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: AppColors.yellow.withValues(alpha: .92),
+            borderRadius: BorderRadius.circular(6),
+            boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 12)],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Text(
+              'COMBO x$combo',
+              style: const TextStyle(
+                color: AppColors.camera,
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class _PreparationBar extends StatelessWidget {
   const _PreparationBar({required this.c, this.enabled = true});
   final GameCoordinator c;
@@ -689,6 +770,32 @@ class _GameScore extends StatelessWidget {
             ],
           ),
         ),
+        if (c.modeSession.hasScore) ...[
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                context.l10n.text(
+                  c.engine.config.mode == SafetyGameMode.combo
+                      ? '分数 / 连击'
+                      : '分数',
+                ),
+                style: const TextStyle(fontSize: 12, color: AppColors.muted),
+              ),
+              Text(
+                c.engine.config.mode == SafetyGameMode.combo
+                    ? '${c.modeSession.score} / x${c.modeSession.combo}'
+                    : '${c.modeSession.score}',
+                style: const TextStyle(
+                  fontSize: 22,
+                  height: 1.4,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 16),
+        ],
         Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
@@ -725,10 +832,13 @@ class _TrackingBar extends StatelessWidget {
       TrackingStatus.incomplete => AppColors.alert,
       _ => AppColors.muted,
     };
-    final label = c.region == null
+    final requiresRegion = c.engine.config.mode.requiresRegion;
+    final label = requiresRegion && c.region == null
         ? '区域未设置'
         : c.editing
         ? '画区中'
+        : c.engine.phase == GamePhase.running
+        ? c.modeSession.prompt(c.engine.elapsed)
         : switch (status) {
             TrackingStatus.waiting => '等待人体识别',
             TrackingStatus.inside => '全身在区域内',
@@ -771,6 +881,41 @@ class _TrackingBar extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ModeSelector extends StatelessWidget {
+  const _ModeSelector({required this.c});
+  final GameCoordinator c;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+    child: DropdownButtonFormField<SafetyGameMode>(
+      key: const ValueKey('game_mode_selector'),
+      initialValue: c.engine.config.mode,
+      isExpanded: true,
+      decoration: InputDecoration(
+        labelText: context.l10n.text('游戏模式'),
+        prefixIcon: const Icon(Icons.sports_esports_outlined),
+      ),
+      items: [
+        for (final mode in SafetyGameMode.values)
+          DropdownMenuItem(
+            value: mode,
+            child: Text(
+              context.l10n.text(mode.label),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+      ],
+      onChanged: c.loading || c.editing
+          ? null
+          : (mode) {
+              if (mode != null) c.updateGameMode(mode);
+            },
+    ),
+  );
 }
 
 class _SetupSummary extends StatelessWidget {
@@ -922,9 +1067,15 @@ class _SessionStatus extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Divider(height: 1),
           const SizedBox(height: 16),
+          Text(
+            context.l10n.text(c.modeSession.prompt(c.engine.elapsed)),
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
@@ -981,6 +1132,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
           seconds: (double.parse(_duration.text) * 60).round(),
         ),
         startCountdown: Duration(seconds: int.parse(_countdown.text)),
+        mode: widget.config.mode,
       ),
     );
   }
@@ -1864,6 +2016,17 @@ class _Results extends StatelessWidget {
     TriggerSide.unknown => '',
   };
 
+  String _reasonLabel(BuildContext context, TriggerReason reason) =>
+      context.l10n.text(switch (reason) {
+        TriggerReason.outside => '关节越界',
+        TriggerReason.absent => '离开画面',
+        TriggerReason.movement => '木头人移动',
+        TriggerReason.pose => '姿势未完成',
+        TriggerReason.obstacle => '碰到禁区',
+        TriggerReason.balance => '失去平衡',
+        TriggerReason.wrongZone => '进入错误区域',
+      });
+
   @override
   Widget build(BuildContext context) {
     final stats = c.engine.stats;
@@ -1887,6 +2050,11 @@ class _Results extends StatelessWidget {
                   Text(
                     context.l10n.text('游戏结束'),
                     style: Theme.of(context).textTheme.headlineLarge,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    context.l10n.text(c.engine.config.mode.label),
+                    style: const TextStyle(color: AppColors.muted),
                   ),
                   const SizedBox(height: 24),
                   Row(
@@ -1922,12 +2090,43 @@ class _Results extends StatelessWidget {
                       ),
                     ],
                   ),
+                  if (c.modeSession.hasScore) ...[
+                    const SizedBox(height: 18),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _Metric(
+                            label: context.l10n.text('分数'),
+                            value: '${c.modeSession.score}',
+                          ),
+                        ),
+                        Expanded(
+                          child: _Metric(
+                            label: context.l10n.text(
+                              c.engine.config.mode == SafetyGameMode.balance
+                                  ? '最长平衡'
+                                  : '完成动作',
+                            ),
+                            value:
+                                c.engine.config.mode == SafetyGameMode.balance
+                                ? formatDuration(c.modeSession.bestHold)
+                                : '${c.modeSession.completedChallenges}',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   Text(
-                    context.l10n.text('越界 {outside} · 离开 {absent}', {
-                      'outside': stats.outsideCount,
-                      'absent': stats.absentCount,
-                    }),
+                    context.l10n.text(
+                      c.engine.config.mode == SafetyGameMode.classic
+                          ? '越界 {outside} · 离开 {absent}'
+                          : '违规 {outside} · 离开 {absent}',
+                      {
+                        'outside': stats.outsideCount,
+                        'absent': stats.absentCount,
+                      },
+                    ),
                     style: const TextStyle(color: AppColors.muted),
                   ),
                   const SizedBox(height: 4),
@@ -1972,13 +2171,7 @@ class _Results extends StatelessWidget {
                             '${event.sequence}'.padLeft(2, '0'),
                             style: const TextStyle(color: AppColors.muted),
                           ),
-                          title: Text(
-                            context.l10n.text(
-                              event.reason == TriggerReason.outside
-                                  ? '关节越界'
-                                  : '离开画面',
-                            ),
-                          ),
+                          title: Text(_reasonLabel(context, event.reason)),
                           subtitle: Text(
                             [
                               if (_sideLabel(context, event.side).isNotEmpty)

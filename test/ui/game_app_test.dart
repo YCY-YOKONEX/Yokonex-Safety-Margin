@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:safety_margin/app/game_coordinator.dart';
 import 'package:safety_margin/domain/game_engine.dart';
+import 'package:safety_margin/domain/game_mode.dart';
 import 'package:safety_margin/domain/pose_sample.dart';
 import 'package:safety_margin/services/settings_store.dart';
 import 'package:safety_margin/services/coyote_device.dart';
@@ -182,6 +183,49 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
     expect(c.engine.phase, GamePhase.running);
+  });
+
+  testWidgets('可选择全部游戏模式且无需画区的模式可以开始', (tester) async {
+    late FakePoseCamera camera;
+    final store = FakeSettingsStore(
+      const SavedSetup(
+        config: GameConfig(
+          startCountdown: Duration.zero,
+          mode: SafetyGameMode.redLightGreenLight,
+        ),
+        cameraId: 'front',
+      ),
+    );
+    final c = GameCoordinator(
+      cameraFactory: (readEpoch) => camera = FakePoseCamera(readEpoch),
+      store: store,
+      keepAwake: (_) async {},
+      autoTick: false,
+    );
+    await tester.pumpWidget(SafetyMarginApp(coordinator: c));
+    await tester.pumpAndSettle();
+    camera.emit(fullPose());
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('game_mode_selector')), findsOneWidget);
+    expect(find.text('自由圈画'), findsNothing);
+    expect(c.canStart, isTrue);
+    await tester.tap(find.byKey(const ValueKey('game_mode_selector')));
+    await tester.pumpAndSettle();
+    for (final mode in SafetyGameMode.values) {
+      expect(find.text(mode.label), findsWidgets);
+    }
+    await tester.tap(find.text('闪避模式').last);
+    await tester.pumpAndSettle();
+    expect(c.engine.config.mode, SafetyGameMode.dodge);
+    expect(store.setup.config.mode, SafetyGameMode.dodge);
+    camera.emit(fullPose());
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('start_game')));
+    await tester.pumpAndSettle();
+    expect(c.engine.phase, GamePhase.running);
+    expect(find.text('闪避移动禁区'), findsWidgets);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('结果页显示异常统计、方向和触发时间轴', (tester) async {

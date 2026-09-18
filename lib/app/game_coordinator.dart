@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -7,6 +8,7 @@ import '../domain/activity_region.dart';
 import '../domain/coyote_protocol.dart';
 import '../domain/ems_protocol.dart';
 import '../domain/game_engine.dart';
+import '../domain/game_mode.dart';
 import '../domain/pose_sample.dart';
 import '../services/ems_device.dart';
 import '../services/coyote_device.dart';
@@ -52,6 +54,7 @@ class GameCoordinator extends ChangeNotifier {
   }
 
   late final GameEngine engine;
+  final GameModeSession modeSession = GameModeSession();
   late final OutputDeviceController? output;
   EmsDeviceController? get ems => output?.yokonex;
   CoyoteDeviceController? get coyote => output?.coyote;
@@ -80,11 +83,26 @@ class GameCoordinator extends ChangeNotifier {
       !loading &&
       !editing &&
       camera.ready &&
-      region != null &&
+      (!engine.config.mode.requiresRegion || region != null) &&
       (output?.readyToOutput ?? true) &&
       engine.canStart;
   bool get canResume =>
       camera.ready && (output?.readyToOutput ?? true) && engine.canResume;
+
+  ActivityRegion? get displayRegion => modeSession.effectiveRegion(
+    region,
+    engine.elapsed,
+    engine.config.duration,
+  );
+
+  Rect? get obstacle => engine.config.mode == SafetyGameMode.dodge
+      ? modeSession.obstacleAt(engine.elapsed)
+      : null;
+
+  (ActivityRegion, ActivityRegion)? get dualZones =>
+      engine.config.mode == SafetyGameMode.dualZone
+      ? modeSession.dualZones(region)
+      : null;
 
   Future<void> initialize() async {
     SavedSetup setup;
@@ -96,6 +114,7 @@ class GameCoordinator extends ChangeNotifier {
     }
     if (_disposed) return;
     engine.configure(setup.config);
+    modeSession.reset(setup.config.mode);
     ems?.configure(setup.emsConfig);
     coyote?.configure(setup.coyoteConfig);
     if (output != null) output!.selected = setup.outputDeviceType;
@@ -123,15 +142,20 @@ class GameCoordinator extends ChangeNotifier {
         _foreground) {
       _lastFrame = frame;
       sample = frame.sample;
-      final status = editing
-          ? TrackingStatus.waiting
-          : frame.sample.classify(region);
+      final observation = editing
+          ? const ModeObservation(TrackingStatus.waiting)
+          : modeSession.evaluate(
+              frame.sample,
+              region,
+              engine.elapsed,
+              engine.config.duration,
+            );
       engine.acceptObservation(
-        status,
+        observation.status,
         epoch: frame.epoch,
-        side: status == TrackingStatus.outside
-            ? frame.sample.outsideSide(region)
-            : TriggerSide.unknown,
+        side: observation.side,
+        reason: _triggerReason(observation),
+        forceDirectional: observation.forceDirectional,
       );
     }
     if (camera.error != null && camera.error != _lastCameraError) {
@@ -213,8 +237,24 @@ class GameCoordinator extends ChangeNotifier {
   }
 
   void updateConfig(GameConfig value) {
+    final modeChanged = engine.config.mode != value.mode;
     engine.configure(value);
+    if (modeChanged) {
+      modeSession.reset(value.mode);
+      engine.invalidateObservation();
+    }
     unawaited(_save());
+  }
+
+  void updateGameMode(SafetyGameMode mode) {
+    if (engine.phase != GamePhase.ready || engine.config.mode == mode) return;
+    updateConfig(
+      GameConfig(
+        duration: engine.config.duration,
+        startCountdown: engine.config.startCountdown,
+        mode: mode,
+      ),
+    );
   }
 
   void updateEmsConfig(EmsConfig value) {
@@ -260,7 +300,9 @@ class GameCoordinator extends ChangeNotifier {
   }
 
   void start() {
-    if (canStart) engine.start();
+    if (!canStart) return;
+    modeSession.reset(engine.config.mode);
+    engine.start();
   }
 
   void pause() => engine.pause(PauseReason.manual);
@@ -274,6 +316,7 @@ class GameCoordinator extends ChangeNotifier {
     sample = null;
     _lastFrame = null;
     engine.reset();
+    modeSession.reset(engine.config.mode);
     await camera.initialize();
   }
 
@@ -313,6 +356,24 @@ class GameCoordinator extends ChangeNotifier {
     notice = value;
     noticeVersion++;
     notifyListeners();
+  }
+
+  TriggerReason? _triggerReason(ModeObservation observation) {
+    if (observation.status == TrackingStatus.absent) {
+      return TriggerReason.absent;
+    }
+    if (observation.status != TrackingStatus.outside &&
+        observation.status != TrackingStatus.incomplete) {
+      return null;
+    }
+    return switch (observation.violation) {
+      ModeViolation.boundary => TriggerReason.outside,
+      ModeViolation.movement => TriggerReason.movement,
+      ModeViolation.pose => TriggerReason.pose,
+      ModeViolation.obstacle => TriggerReason.obstacle,
+      ModeViolation.balance => TriggerReason.balance,
+      ModeViolation.wrongZone => TriggerReason.wrongZone,
+    };
   }
 
   @override

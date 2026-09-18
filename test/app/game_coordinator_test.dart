@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:safety_margin/app/game_coordinator.dart';
 import 'package:safety_margin/domain/game_engine.dart';
+import 'package:safety_margin/domain/game_mode.dart';
 import 'package:safety_margin/domain/pose_sample.dart';
 import 'package:safety_margin/services/settings_store.dart';
 import '../support/fakes.dart';
@@ -40,6 +41,48 @@ void main() {
     c.start();
     camera.emit(fullPose(outside: true));
     expect(c.engine.events.single.side, TriggerSide.left);
+  });
+  test('无需画区的模式可直接开始，双区违规进入统一触发链', () async {
+    c.dispose();
+    store = FakeSettingsStore(
+      const SavedSetup(
+        config: GameConfig(
+          startCountdown: Duration.zero,
+          mode: SafetyGameMode.poseChallenge,
+        ),
+        cameraId: 'front',
+      ),
+    );
+    c = GameCoordinator(
+      engine: GameEngine(sink: MemoryTriggerSink(), now: () => now),
+      cameraFactory: (readEpoch) => camera = FakePoseCamera(readEpoch),
+      store: store,
+      keepAwake: (_) async {},
+      autoTick: false,
+    );
+    await c.initialize();
+    camera.emit(fullPose());
+    expect(c.canStart, isTrue);
+
+    c.updateConfig(
+      const GameConfig(
+        startCountdown: Duration.zero,
+        mode: SafetyGameMode.dualZone,
+      ),
+    );
+    c.region = testRegion();
+    camera.emit(fullPose());
+    c.start();
+    final pose = fullPose();
+    camera.emit(
+      PoseSample({
+        ...pose.landmarks,
+        Joint.leftWrist: const Landmark(Offset(.75, .55), .95),
+      }),
+    );
+    expect(c.engine.events.single.reason, TriggerReason.wrongZone);
+    expect(c.engine.events.single.side, TriggerSide.left);
+    expect(c.engine.events.single.forceDirectional, isTrue);
   });
   test('切换摄像头清空区域并保存', () async {
     camera.emit(fullPose());

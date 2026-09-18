@@ -1,16 +1,19 @@
 import 'package:flutter/foundation.dart';
 
+import 'game_mode.dart';
 import 'pose_sample.dart';
 
 class GameConfig {
   const GameConfig({
     this.duration = const Duration(minutes: 5),
     this.startCountdown = const Duration(seconds: 5),
+    this.mode = SafetyGameMode.classic,
   });
 
   final Duration duration;
   // 开始游戏后、正式进入判定前的准备倒计时；0 表示不倒计时直接开始。
   final Duration startCountdown;
+  final SafetyGameMode mode;
 
   bool get isValid =>
       duration >= const Duration(seconds: 1) &&
@@ -21,12 +24,16 @@ class GameConfig {
   Map<String, Object> toJson() => {
     'durationSeconds': duration.inSeconds,
     'startCountdownSeconds': startCountdown.inSeconds,
+    'mode': mode.name,
   };
 
   factory GameConfig.fromJson(Map<String, dynamic> json) {
     final config = GameConfig(
       duration: Duration(seconds: json['durationSeconds'] as int),
       startCountdown: Duration(seconds: json['startCountdownSeconds'] as int),
+      mode: SafetyGameMode.values.byName(
+        json['mode'] as String? ?? SafetyGameMode.classic.name,
+      ),
     );
     if (!config.isValid) throw const FormatException('游戏参数无效');
     return config;
@@ -37,7 +44,15 @@ enum GamePhase { ready, running, paused, finished }
 
 enum PauseReason { manual, background, cameraFault, outputFault }
 
-enum TriggerReason { outside, absent }
+enum TriggerReason {
+  outside,
+  absent,
+  movement,
+  pose,
+  obstacle,
+  balance,
+  wrongZone,
+}
 
 class TriggerEvent {
   const TriggerEvent({
@@ -46,6 +61,7 @@ class TriggerEvent {
     required this.elapsed,
     required this.reason,
     this.side = TriggerSide.unknown,
+    this.forceDirectional = false,
     this.recoveredAt,
   });
   final String sessionId;
@@ -53,6 +69,7 @@ class TriggerEvent {
   final Duration elapsed;
   final TriggerReason reason;
   final TriggerSide side;
+  final bool forceDirectional;
   final Duration? recoveredAt;
 
   Duration durationUntil(Duration sessionDuration) {
@@ -66,6 +83,7 @@ class TriggerEvent {
     elapsed: elapsed,
     reason: reason,
     side: side,
+    forceDirectional: forceDirectional,
     recoveredAt: recoveredAt ?? this.recoveredAt,
   );
 }
@@ -94,10 +112,10 @@ class GameSessionStats {
     var longestSafe = Duration.zero;
     var cursor = Duration.zero;
     for (final event in events) {
-      if (event.reason == TriggerReason.outside) {
-        outsideCount++;
-      } else {
+      if (event.reason == TriggerReason.absent) {
         absentCount++;
+      } else {
+        outsideCount++;
       }
       switch (event.side) {
         case TriggerSide.left:
@@ -247,6 +265,8 @@ class GameEngine extends ChangeNotifier {
     TrackingStatus status, {
     required int epoch,
     TriggerSide side = TriggerSide.unknown,
+    TriggerReason? reason,
+    bool forceDirectional = false,
   }) {
     if (epoch != _epoch || phase == GamePhase.finished) return;
     final now = _now();
@@ -267,7 +287,9 @@ class GameEngine extends ChangeNotifier {
         case TrackingStatus.absent:
           _insideStart = null;
           _incompleteStart = null;
-          if (!_triggering) _trigger(status, side);
+          if (!_triggering) {
+            _trigger(status, side, reason, forceDirectional);
+          }
         // 跟踪不完整（关节被遮挡）给一段豁免时间；已经在触发中则不豁免，
         // 不能靠遮挡关节点中途逃避判定。超过豁免时间仍未恢复才按越界触发。
         case TrackingStatus.incomplete:
@@ -277,7 +299,7 @@ class GameEngine extends ChangeNotifier {
           } else {
             _incompleteStart ??= now;
             if (now - _incompleteStart! >= incompleteGrace) {
-              _trigger(status, side);
+              _trigger(status, side, reason, forceDirectional);
             }
           }
         case TrackingStatus.inside:
@@ -318,15 +340,23 @@ class GameEngine extends ChangeNotifier {
   }
 
   /// 越界（或识别不到人）后立即触发，设备端持续输出直到确认回到区域内。
-  void _trigger(TrackingStatus status, TriggerSide side) {
+  void _trigger(
+    TrackingStatus status,
+    TriggerSide side,
+    TriggerReason? reason,
+    bool forceDirectional,
+  ) {
     final event = TriggerEvent(
       sessionId: _sessionId,
       sequence: _events.length + 1,
       elapsed: elapsed,
-      reason: status == TrackingStatus.absent
-          ? TriggerReason.absent
-          : TriggerReason.outside,
+      reason:
+          reason ??
+          (status == TrackingStatus.absent
+              ? TriggerReason.absent
+              : TriggerReason.outside),
       side: side,
+      forceDirectional: forceDirectional,
     );
     try {
       sink.emit(event);
