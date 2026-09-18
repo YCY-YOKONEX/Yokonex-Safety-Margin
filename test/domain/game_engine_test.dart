@@ -60,6 +60,14 @@ void main() {
       }),
       throwsFormatException,
     );
+    final legacy = GameConfig.fromJson({
+      'durationSeconds': 300,
+      'startCountdownSeconds': 5,
+      'mode': 'redLightGreenLight',
+    });
+    expect(legacy.redLightSettings.moveSeconds, 5);
+    expect(legacy.redLightSettings.freezeSeconds, 3);
+    expect(legacy.customPoseSettings.mismatchGrace.inSeconds, 3);
   });
   test('开局和继续都只需要新鲜的观测帧，不要求画面中有人', () {
     final h = Harness();

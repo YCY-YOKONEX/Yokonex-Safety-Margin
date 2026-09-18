@@ -6,6 +6,7 @@ import '../app/game_coordinator.dart';
 import '../domain/activity_region.dart';
 import '../domain/game_engine.dart';
 import '../domain/game_mode.dart';
+import '../domain/pose_sample.dart';
 import 'app_localizations.dart';
 import 'app_theme.dart';
 
@@ -165,6 +166,7 @@ class _CameraStageState extends State<CameraStage> {
                               : c.displayRegion,
                           obstacle: c.obstacle,
                           dualZones: c.dualZones,
+                          customPose: c.customPoseTemplate,
                           stroke: _drawing && c.editing ? _stroke : const [],
                           mode: c.drawingMode,
                           showHandles:
@@ -275,6 +277,7 @@ class PoseOverlayPainter extends CustomPainter {
     required this.region,
     this.obstacle,
     this.dualZones,
+    this.customPose,
     this.stroke = const [],
     this.mode = RegionMode.freehand,
     this.showHandles = false,
@@ -283,6 +286,7 @@ class PoseOverlayPainter extends CustomPainter {
   final ActivityRegion? region;
   final Rect? obstacle;
   final (ActivityRegion, ActivityRegion)? dualZones;
+  final CustomPoseTemplate? customPose;
   final List<Offset> stroke;
   final RegionMode mode;
   final bool showHandles;
@@ -424,6 +428,9 @@ class PoseOverlayPainter extends CustomPainter {
           ..strokeWidth = 2,
       );
     }
+    if (customPose case final template?) {
+      _paintCustomPose(canvas, template);
+    }
     if (stroke.isNotEmpty) {
       final path = mode == RegionMode.rectangle && stroke.length == 2
           ? (Path()..addRect(
@@ -474,6 +481,45 @@ class PoseOverlayPainter extends CustomPainter {
       canvas,
       center - Offset(painter.width / 2, painter.height / 2),
     );
+  }
+
+  void _paintCustomPose(Canvas canvas, CustomPoseTemplate template) {
+    final linePaint = Paint()
+      ..color = AppColors.yellow.withValues(alpha: .82)
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round;
+    for (final edge in customPoseEdges) {
+      canvas.drawLine(
+        transform.toViewport(template.points[edge.$1]!),
+        transform.toViewport(template.points[edge.$2]!),
+        linePaint,
+      );
+    }
+    final head = transform.toViewport(template.points[Joint.nose]!);
+    canvas.drawCircle(
+      head,
+      18,
+      Paint()
+        ..color = AppColors.yellow.withValues(alpha: .16)
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(
+      head,
+      18,
+      Paint()
+        ..color = AppColors.yellow
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3,
+    );
+    for (final joint in customPoseJoints.where(
+      (joint) => joint != Joint.nose,
+    )) {
+      canvas.drawCircle(
+        transform.toViewport(template.points[joint]!),
+        6,
+        Paint()..color = AppColors.yellow,
+      );
+    }
   }
 
   @override

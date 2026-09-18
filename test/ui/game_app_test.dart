@@ -228,6 +228,102 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('木头人可以保存移动、静止和随机设置', (tester) async {
+    late FakePoseCamera camera;
+    final store = FakeSettingsStore(
+      const SavedSetup(
+        config: GameConfig(mode: SafetyGameMode.redLightGreenLight),
+        cameraId: 'front',
+      ),
+    );
+    final c = GameCoordinator(
+      cameraFactory: (readEpoch) => camera = FakePoseCamera(readEpoch),
+      store: store,
+      keepAwake: (_) async {},
+      autoTick: false,
+    );
+    await tester.pumpWidget(SafetyMarginApp(coordinator: c));
+    await tester.pumpAndSettle();
+    camera.emit(fullPose());
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('game_mode_settings')));
+    await tester.pumpAndSettle();
+
+    final moveSlider = tester.widget<Slider>(
+      find.descendant(
+        of: find.byKey(const ValueKey('red_light_move_seconds')),
+        matching: find.byType(Slider),
+      ),
+    );
+    moveSlider.onChanged!(8);
+    final freezeSlider = tester.widget<Slider>(
+      find.descendant(
+        of: find.byKey(const ValueKey('red_light_freeze_seconds')),
+        matching: find.byType(Slider),
+      ),
+    );
+    freezeSlider.onChanged!(6);
+    await tester.tap(find.byKey(const ValueKey('red_light_randomized')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('save_red_light_settings')));
+    await tester.pumpAndSettle();
+
+    expect(c.engine.config.redLightSettings.moveSeconds, 8);
+    expect(c.engine.config.redLightSettings.freezeSeconds, 6);
+    expect(c.engine.config.redLightSettings.randomized, isTrue);
+    expect(store.setup.config.redLightSettings.randomized, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('自定义姿势编辑器可拖动关节点并保存超时', (tester) async {
+    late FakePoseCamera camera;
+    final store = FakeSettingsStore(
+      const SavedSetup(
+        config: GameConfig(mode: SafetyGameMode.customPose),
+        cameraId: 'front',
+      ),
+    );
+    final c = GameCoordinator(
+      cameraFactory: (readEpoch) => camera = FakePoseCamera(readEpoch),
+      store: store,
+      keepAwake: (_) async {},
+      autoTick: false,
+    );
+    await tester.pumpWidget(SafetyMarginApp(coordinator: c));
+    await tester.pumpAndSettle();
+    camera.emit(fullPose());
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('game_mode_settings')));
+    await tester.pumpAndSettle();
+
+    final canvas = find.byKey(const ValueKey('custom_pose_canvas'));
+    final rect = tester.getRect(canvas);
+    final before =
+        c.engine.config.customPoseSettings.template.points[Joint.nose]!;
+    await tester.dragFrom(
+      Offset(
+        rect.left + rect.width * before.dx,
+        rect.top + rect.height * before.dy,
+      ),
+      const Offset(30, 0),
+    );
+    final grace = tester.widget<Slider>(
+      find.byKey(const ValueKey('custom_pose_grace')),
+    );
+    grace.onChanged!(5);
+    await tester.pump();
+    await tester.ensureVisible(find.byKey(const ValueKey('save_custom_pose')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('save_custom_pose')));
+    await tester.pumpAndSettle();
+
+    final saved = c.engine.config.customPoseSettings;
+    expect(saved.mismatchGrace, const Duration(seconds: 5));
+    expect(saved.template.points[Joint.nose], isNot(before));
+    expect(store.setup.config.customPoseSettings.mismatchGrace.inSeconds, 5);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('结果页显示异常统计、方向和触发时间轴', (tester) async {
     late FakePoseCamera camera;
     final c = GameCoordinator(

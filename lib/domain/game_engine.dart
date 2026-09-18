@@ -8,23 +8,45 @@ class GameConfig {
     this.duration = const Duration(minutes: 5),
     this.startCountdown = const Duration(seconds: 5),
     this.mode = SafetyGameMode.classic,
+    this.redLightSettings = const RedLightSettings(),
+    this.customPoseSettings = const CustomPoseSettings(),
   });
 
   final Duration duration;
   // 开始游戏后、正式进入判定前的准备倒计时；0 表示不倒计时直接开始。
   final Duration startCountdown;
   final SafetyGameMode mode;
+  final RedLightSettings redLightSettings;
+  final CustomPoseSettings customPoseSettings;
 
   bool get isValid =>
       duration >= const Duration(seconds: 1) &&
       duration <= const Duration(hours: 24) &&
       startCountdown >= Duration.zero &&
-      startCountdown <= const Duration(seconds: 30);
+      startCountdown <= const Duration(seconds: 30) &&
+      redLightSettings.isValid &&
+      customPoseSettings.isValid;
+
+  GameConfig copyWith({
+    Duration? duration,
+    Duration? startCountdown,
+    SafetyGameMode? mode,
+    RedLightSettings? redLightSettings,
+    CustomPoseSettings? customPoseSettings,
+  }) => GameConfig(
+    duration: duration ?? this.duration,
+    startCountdown: startCountdown ?? this.startCountdown,
+    mode: mode ?? this.mode,
+    redLightSettings: redLightSettings ?? this.redLightSettings,
+    customPoseSettings: customPoseSettings ?? this.customPoseSettings,
+  );
 
   Map<String, Object> toJson() => {
     'durationSeconds': duration.inSeconds,
     'startCountdownSeconds': startCountdown.inSeconds,
     'mode': mode.name,
+    'redLightSettings': redLightSettings.toJson(),
+    'customPoseSettings': customPoseSettings.toJson(),
   };
 
   factory GameConfig.fromJson(Map<String, dynamic> json) {
@@ -34,6 +56,16 @@ class GameConfig {
       mode: SafetyGameMode.values.byName(
         json['mode'] as String? ?? SafetyGameMode.classic.name,
       ),
+      redLightSettings: json['redLightSettings'] == null
+          ? const RedLightSettings()
+          : RedLightSettings.fromJson(
+              json['redLightSettings'] as Map<String, dynamic>,
+            ),
+      customPoseSettings: json['customPoseSettings'] == null
+          ? const CustomPoseSettings()
+          : CustomPoseSettings.fromJson(
+              json['customPoseSettings'] as Map<String, dynamic>,
+            ),
     );
     if (!config.isValid) throw const FormatException('游戏参数无效');
     return config;
@@ -52,6 +84,7 @@ enum TriggerReason {
   obstacle,
   balance,
   wrongZone,
+  customPose,
 }
 
 class TriggerEvent {
@@ -221,6 +254,12 @@ class GameEngine extends ChangeNotifier {
   List<TriggerEvent> get events => List.unmodifiable(_events);
   GameSessionStats get stats => GameSessionStats.from(_events, elapsed);
   Duration get remaining => config.duration - elapsed;
+  Duration get liveElapsed {
+    if (phase != GamePhase.running || _lastTick == null) return elapsed;
+    final value = elapsed + (_now() - _lastTick!);
+    return value > config.duration ? config.duration : value;
+  }
+
   bool get triggering => _triggering;
   bool get _fresh =>
       _lastObservation != null && _now() - _lastObservation! < frameTimeout;

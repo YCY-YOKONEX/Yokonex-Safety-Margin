@@ -18,6 +18,14 @@ void main() {
         config: const GameConfig(
           duration: Duration(minutes: 2),
           mode: SafetyGameMode.combo,
+          redLightSettings: RedLightSettings(
+            moveSeconds: 9,
+            freezeSeconds: 4,
+            randomized: true,
+          ),
+          customPoseSettings: CustomPoseSettings(
+            mismatchGrace: Duration(seconds: 7),
+          ),
         ),
         region: testRegion(),
         cameraId: 'front',
@@ -41,6 +49,13 @@ void main() {
     final loaded = await store.load();
     expect(loaded.config.duration, const Duration(minutes: 2));
     expect(loaded.config.mode, SafetyGameMode.combo);
+    expect(loaded.config.redLightSettings.moveSeconds, 9);
+    expect(loaded.config.redLightSettings.freezeSeconds, 4);
+    expect(loaded.config.redLightSettings.randomized, isTrue);
+    expect(
+      loaded.config.customPoseSettings.mismatchGrace,
+      const Duration(seconds: 7),
+    );
     expect(loaded.region!.points, testRegion().points);
     expect(loaded.cameraId, 'front');
     expect(loaded.emsConfig.generation, EmsGeneration.first);

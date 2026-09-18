@@ -86,6 +86,32 @@ void main() {
     expect(moved.violation, ModeViolation.movement);
   });
 
+  test('木头人支持固定移动/静止秒数和每轮随机范围', () {
+    final fixed = GameModeSession()
+      ..reset(
+        SafetyGameMode.redLightGreenLight,
+        redLight: const RedLightSettings(moveSeconds: 2, freezeSeconds: 4),
+      );
+    expect(fixed.isGreenLight(const Duration(milliseconds: 1999)), isTrue);
+    expect(fixed.isGreenLight(const Duration(seconds: 2)), isFalse);
+    expect(fixed.isGreenLight(const Duration(milliseconds: 5999)), isFalse);
+    expect(fixed.isGreenLight(const Duration(seconds: 6)), isTrue);
+
+    final random = GameModeSession(random: Random(7))
+      ..reset(
+        SafetyGameMode.redLightGreenLight,
+        redLight: const RedLightSettings(
+          moveSeconds: 8,
+          freezeSeconds: 5,
+          randomized: true,
+        ),
+      );
+    expect(random.lightPhaseDuration.inSeconds, inInclusiveRange(1, 8));
+    final first = random.lightPhaseDuration;
+    random.isGreenLight(first);
+    expect(random.lightPhaseDuration.inSeconds, inInclusiveRange(1, 5));
+  });
+
   test('指定姿势保持成功后得分并更换动作', () {
     final session = GameModeSession(random: Random(1))
       ..reset(SafetyGameMode.poseChallenge);
@@ -195,5 +221,57 @@ void main() {
     expect(result.side, TriggerSide.left);
     expect(result.violation, ModeViolation.wrongZone);
     expect(result.forceDirectional, isTrue);
+  });
+
+  test('自定义姿势要求全部目标关节点匹配，超过自定义秒数才违规', () {
+    const grace = Duration(seconds: 2);
+    const settings = CustomPoseSettings(mismatchGrace: grace);
+    final session = GameModeSession()
+      ..reset(SafetyGameMode.customPose, customPose: settings);
+    PoseSample targetPose() => PoseSample({
+      for (final entry in settings.template.points.entries)
+        entry.key: Landmark(entry.value, .95),
+    });
+    expect(
+      session
+          .evaluate(
+            targetPose(),
+            null,
+            Duration.zero,
+            const Duration(minutes: 1),
+          )
+          .status,
+      TrackingStatus.inside,
+    );
+    final wrong = PoseSample({
+      ...targetPose().landmarks,
+      Joint.leftWrist: const Landmark(Offset(.05, .05), .95),
+    });
+    expect(
+      session
+          .evaluate(wrong, null, Duration.zero, const Duration(minutes: 1))
+          .status,
+      TrackingStatus.inside,
+    );
+    final expired = session.evaluate(
+      wrong,
+      null,
+      const Duration(seconds: 2),
+      const Duration(minutes: 1),
+    );
+    expect(expired.status, TrackingStatus.outside);
+    expect(expired.side, TriggerSide.left);
+    expect(expired.violation, ModeViolation.customPose);
+    expect(
+      session
+          .evaluate(
+            targetPose(),
+            null,
+            const Duration(milliseconds: 2100),
+            const Duration(minutes: 1),
+          )
+          .status,
+      TrackingStatus.inside,
+    );
   });
 }

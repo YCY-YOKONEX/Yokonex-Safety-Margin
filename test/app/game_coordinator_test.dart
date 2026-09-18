@@ -84,6 +84,36 @@ void main() {
     expect(c.engine.events.single.side, TriggerSide.left);
     expect(c.engine.events.single.forceDirectional, isTrue);
   });
+  test('自定义姿势超过配置时限后进入统一触发链', () async {
+    c.updateConfig(
+      const GameConfig(
+        startCountdown: Duration.zero,
+        mode: SafetyGameMode.customPose,
+        customPoseSettings: CustomPoseSettings(
+          mismatchGrace: Duration(seconds: 2),
+        ),
+      ),
+    );
+    final target = PoseSample({
+      for (final entry in CustomPoseTemplate.standard.points.entries)
+        entry.key: Landmark(entry.value, .95),
+    });
+    camera.emit(target);
+    c.start();
+    final wrong = PoseSample({
+      ...target.landmarks,
+      Joint.rightWrist: const Landmark(Offset(.05, .05), .95),
+    });
+    camera.emit(wrong);
+    expect(c.engine.events, isEmpty);
+    now += const Duration(seconds: 1);
+    camera.emit(wrong);
+    expect(c.engine.events, isEmpty);
+    now += const Duration(seconds: 1);
+    camera.emit(wrong);
+    expect(c.engine.events.single.reason, TriggerReason.customPose);
+    expect(c.engine.events.single.side, TriggerSide.right);
+  });
   test('切换摄像头清空区域并保存', () async {
     camera.emit(fullPose());
     await c.switchCamera();

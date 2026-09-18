@@ -13,6 +13,7 @@ enum SafetyGameMode {
   balance,
   combo,
   dualZone,
+  customPose,
 }
 
 extension SafetyGameModeInfo on SafetyGameMode {
@@ -32,7 +33,171 @@ extension SafetyGameModeInfo on SafetyGameMode {
     SafetyGameMode.balance => '平衡挑战',
     SafetyGameMode.combo => '连击模式',
     SafetyGameMode.dualZone => '双区模式',
+    SafetyGameMode.customPose => '自定义姿势',
   };
+}
+
+class RedLightSettings {
+  const RedLightSettings({
+    this.moveSeconds = 5,
+    this.freezeSeconds = 3,
+    this.randomized = false,
+  });
+
+  final int moveSeconds;
+  final int freezeSeconds;
+  final bool randomized;
+
+  bool get isValid =>
+      moveSeconds >= 1 &&
+      moveSeconds <= 60 &&
+      freezeSeconds >= 1 &&
+      freezeSeconds <= 60;
+
+  Map<String, Object> toJson() => {
+    'moveSeconds': moveSeconds,
+    'freezeSeconds': freezeSeconds,
+    'randomized': randomized,
+  };
+
+  factory RedLightSettings.fromJson(Map<String, dynamic> json) {
+    final result = RedLightSettings(
+      moveSeconds: json['moveSeconds'] as int? ?? 5,
+      freezeSeconds: json['freezeSeconds'] as int? ?? 3,
+      randomized: json['randomized'] as bool? ?? false,
+    );
+    if (!result.isValid) throw const FormatException('木头人参数无效');
+    return result;
+  }
+}
+
+const customPoseJoints = <Joint>[
+  Joint.nose,
+  Joint.leftShoulder,
+  Joint.rightShoulder,
+  Joint.leftElbow,
+  Joint.rightElbow,
+  Joint.leftWrist,
+  Joint.rightWrist,
+  Joint.leftHip,
+  Joint.rightHip,
+  Joint.leftKnee,
+  Joint.rightKnee,
+  Joint.leftAnkle,
+  Joint.rightAnkle,
+];
+
+const customPoseEdges = <(Joint, Joint)>[
+  (Joint.nose, Joint.leftShoulder),
+  (Joint.nose, Joint.rightShoulder),
+  (Joint.leftShoulder, Joint.rightShoulder),
+  (Joint.leftShoulder, Joint.leftElbow),
+  (Joint.leftElbow, Joint.leftWrist),
+  (Joint.rightShoulder, Joint.rightElbow),
+  (Joint.rightElbow, Joint.rightWrist),
+  (Joint.leftShoulder, Joint.leftHip),
+  (Joint.rightShoulder, Joint.rightHip),
+  (Joint.leftHip, Joint.rightHip),
+  (Joint.leftHip, Joint.leftKnee),
+  (Joint.leftKnee, Joint.leftAnkle),
+  (Joint.rightHip, Joint.rightKnee),
+  (Joint.rightKnee, Joint.rightAnkle),
+];
+
+class CustomPoseTemplate {
+  const CustomPoseTemplate(this.points);
+
+  static const standard = CustomPoseTemplate({
+    Joint.nose: Offset(.50, .16),
+    Joint.leftShoulder: Offset(.40, .28),
+    Joint.rightShoulder: Offset(.60, .28),
+    Joint.leftElbow: Offset(.30, .42),
+    Joint.rightElbow: Offset(.70, .42),
+    Joint.leftWrist: Offset(.22, .56),
+    Joint.rightWrist: Offset(.78, .56),
+    Joint.leftHip: Offset(.44, .53),
+    Joint.rightHip: Offset(.56, .53),
+    Joint.leftKnee: Offset(.42, .72),
+    Joint.rightKnee: Offset(.58, .72),
+    Joint.leftAnkle: Offset(.40, .90),
+    Joint.rightAnkle: Offset(.60, .90),
+  });
+
+  final Map<Joint, Offset> points;
+
+  bool get isValid =>
+      points.length == customPoseJoints.length &&
+      customPoseJoints.every((joint) {
+        final point = points[joint];
+        return point != null &&
+            point.dx.isFinite &&
+            point.dy.isFinite &&
+            point.dx >= .03 &&
+            point.dx <= .97 &&
+            point.dy >= .03 &&
+            point.dy <= .97;
+      });
+
+  CustomPoseTemplate move(Joint joint, Offset point) => CustomPoseTemplate({
+    ...points,
+    joint: Offset(point.dx.clamp(.03, .97), point.dy.clamp(.03, .97)),
+  });
+
+  Map<String, Object> toJson() => {
+    for (final joint in customPoseJoints)
+      joint.name: [points[joint]!.dx, points[joint]!.dy],
+  };
+
+  factory CustomPoseTemplate.fromJson(Map<String, dynamic> json) {
+    final result = CustomPoseTemplate({
+      for (final joint in customPoseJoints)
+        joint: switch (json[joint.name]) {
+          final List<dynamic> pair when pair.length == 2 => Offset(
+            (pair[0] as num).toDouble(),
+            (pair[1] as num).toDouble(),
+          ),
+          _ => throw const FormatException('自定义姿势无效'),
+        },
+    });
+    if (!result.isValid) throw const FormatException('自定义姿势无效');
+    return result;
+  }
+}
+
+class CustomPoseSettings {
+  const CustomPoseSettings({
+    this.template = CustomPoseTemplate.standard,
+    this.mismatchGrace = const Duration(seconds: 3),
+  });
+
+  static const tolerance = .075;
+  final CustomPoseTemplate template;
+  final Duration mismatchGrace;
+
+  bool get isValid =>
+      template.isValid &&
+      mismatchGrace >= const Duration(seconds: 1) &&
+      mismatchGrace <= const Duration(seconds: 30);
+
+  Map<String, Object> toJson() => {
+    'template': template.toJson(),
+    'mismatchGraceMilliseconds': mismatchGrace.inMilliseconds,
+  };
+
+  factory CustomPoseSettings.fromJson(Map<String, dynamic> json) {
+    final result = CustomPoseSettings(
+      template: json['template'] == null
+          ? CustomPoseTemplate.standard
+          : CustomPoseTemplate.fromJson(
+              json['template'] as Map<String, dynamic>,
+            ),
+      mismatchGrace: Duration(
+        milliseconds: json['mismatchGraceMilliseconds'] as int? ?? 3000,
+      ),
+    );
+    if (!result.isValid) throw const FormatException('自定义姿势参数无效');
+    return result;
+  }
 }
 
 enum PoseChallenge {
@@ -63,7 +228,15 @@ extension PoseChallengeInfo on PoseChallenge {
   };
 }
 
-enum ModeViolation { boundary, movement, pose, obstacle, balance, wrongZone }
+enum ModeViolation {
+  boundary,
+  movement,
+  pose,
+  obstacle,
+  balance,
+  wrongZone,
+  customPose,
+}
 
 class ModeObservation {
   const ModeObservation(
@@ -82,8 +255,6 @@ class ModeObservation {
 class GameModeSession {
   GameModeSession({math.Random? random}) : _random = random ?? math.Random();
 
-  static const greenDuration = Duration(seconds: 5);
-  static const redDuration = Duration(seconds: 3);
   static const challengeGrace = Duration(seconds: 2);
   static const challengeHold = Duration(milliseconds: 1000);
   static const comboHold = Duration(milliseconds: 700);
@@ -103,6 +274,12 @@ class GameModeSession {
   PoseSample? _freezeReference;
   bool _lastRedLight = false;
   bool _violationActive = false;
+  RedLightSettings redLightSettings = const RedLightSettings();
+  CustomPoseSettings customPoseSettings = const CustomPoseSettings();
+  bool _greenLight = true;
+  Duration _lightPhaseStarted = Duration.zero;
+  Duration _lightPhaseDuration = const Duration(seconds: 5);
+  Duration? _customMismatchStarted;
 
   bool get hasScore => switch (mode) {
     SafetyGameMode.poseChallenge ||
@@ -111,8 +288,14 @@ class GameModeSession {
     _ => false,
   };
 
-  void reset(SafetyGameMode value) {
+  void reset(
+    SafetyGameMode value, {
+    RedLightSettings redLight = const RedLightSettings(),
+    CustomPoseSettings customPose = const CustomPoseSettings(),
+  }) {
     mode = value;
+    redLightSettings = redLight;
+    customPoseSettings = customPose;
     challenge = null;
     score = 0;
     combo = 0;
@@ -125,15 +308,26 @@ class GameModeSession {
     _freezeReference = null;
     _lastRedLight = false;
     _violationActive = false;
+    _greenLight = true;
+    _lightPhaseStarted = Duration.zero;
+    _lightPhaseDuration = _nextLightDuration(green: true);
+    _customMismatchStarted = null;
     if (mode == SafetyGameMode.poseChallenge || mode == SafetyGameMode.combo) {
       _pickChallenge();
     }
   }
 
   bool isGreenLight(Duration elapsed) {
-    final cycle = greenDuration + redDuration;
-    return elapsed.inMilliseconds % cycle.inMilliseconds <
-        greenDuration.inMilliseconds;
+    _advanceLight(elapsed);
+    return _greenLight;
+  }
+
+  Duration get lightPhaseDuration => _lightPhaseDuration;
+
+  Duration lightPhaseRemaining(Duration elapsed) {
+    _advanceLight(elapsed);
+    final remaining = _lightPhaseDuration - (elapsed - _lightPhaseStarted);
+    return remaining.isNegative ? Duration.zero : remaining;
   }
 
   String prompt(Duration elapsed) => switch (mode) {
@@ -146,6 +340,7 @@ class GameModeSession {
     SafetyGameMode.balance => '双手展开并单脚站立',
     SafetyGameMode.combo => challenge?.label ?? '准备姿势',
     SafetyGameMode.dualZone => '左侧留在 A 区，右侧留在 B 区',
+    SafetyGameMode.customPose => '对齐自定义火柴人',
   };
 
   ActivityRegion? effectiveRegion(
@@ -209,6 +404,7 @@ class GameModeSession {
         comboMode: true,
       ),
       SafetyGameMode.dualZone => _dualZoneObservation(sample, baseRegion),
+      SafetyGameMode.customPose => _customPoseObservation(sample, elapsed),
     };
   }
 
@@ -248,6 +444,60 @@ class GameModeSession {
           : TrackingStatus.outside,
       side: side,
       violation: ModeViolation.movement,
+    );
+  }
+
+  void _advanceLight(Duration elapsed) {
+    while (elapsed - _lightPhaseStarted >= _lightPhaseDuration) {
+      _lightPhaseStarted += _lightPhaseDuration;
+      _greenLight = !_greenLight;
+      _lightPhaseDuration = _nextLightDuration(green: _greenLight);
+      _freezeReference = null;
+      _lastRedLight = false;
+    }
+  }
+
+  Duration _nextLightDuration({required bool green}) {
+    final maximum = green
+        ? redLightSettings.moveSeconds
+        : redLightSettings.freezeSeconds;
+    final seconds = redLightSettings.randomized
+        ? 1 + _random.nextInt(maximum)
+        : maximum;
+    return Duration(seconds: seconds);
+  }
+
+  ModeObservation _customPoseObservation(PoseSample sample, Duration elapsed) {
+    var left = false;
+    var right = false;
+    var matches = sample.personDetected;
+    for (final joint in customPoseJoints) {
+      final actual = sample.landmarks[joint];
+      final target = customPoseSettings.template.points[joint]!;
+      if (actual == null ||
+          !actual.isReliable ||
+          (actual.position - target).distance > CustomPoseSettings.tolerance) {
+        matches = false;
+        if (leftMonitoredJoints.contains(joint)) left = true;
+        if (rightMonitoredJoints.contains(joint)) right = true;
+        if (joint == Joint.nose) {
+          left = true;
+          right = true;
+        }
+      }
+    }
+    if (matches) {
+      _customMismatchStarted = null;
+      return const ModeObservation(TrackingStatus.inside);
+    }
+    _customMismatchStarted ??= elapsed;
+    if (elapsed - _customMismatchStarted! < customPoseSettings.mismatchGrace) {
+      return const ModeObservation(TrackingStatus.inside);
+    }
+    return ModeObservation(
+      TrackingStatus.outside,
+      side: _side(left, right),
+      violation: ModeViolation.customPose,
     );
   }
 

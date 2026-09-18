@@ -104,6 +104,11 @@ class GameCoordinator extends ChangeNotifier {
       ? modeSession.dualZones(region)
       : null;
 
+  CustomPoseTemplate? get customPoseTemplate =>
+      engine.config.mode == SafetyGameMode.customPose
+      ? engine.config.customPoseSettings.template
+      : null;
+
   Future<void> initialize() async {
     SavedSetup setup;
     try {
@@ -114,7 +119,7 @@ class GameCoordinator extends ChangeNotifier {
     }
     if (_disposed) return;
     engine.configure(setup.config);
-    modeSession.reset(setup.config.mode);
+    _resetModeSession();
     ems?.configure(setup.emsConfig);
     coyote?.configure(setup.coyoteConfig);
     if (output != null) output!.selected = setup.outputDeviceType;
@@ -147,7 +152,7 @@ class GameCoordinator extends ChangeNotifier {
           : modeSession.evaluate(
               frame.sample,
               region,
-              engine.elapsed,
+              engine.liveElapsed,
               engine.config.duration,
             );
       engine.acceptObservation(
@@ -240,7 +245,7 @@ class GameCoordinator extends ChangeNotifier {
     final modeChanged = engine.config.mode != value.mode;
     engine.configure(value);
     if (modeChanged) {
-      modeSession.reset(value.mode);
+      _resetModeSession();
       engine.invalidateObservation();
     }
     unawaited(_save());
@@ -248,13 +253,19 @@ class GameCoordinator extends ChangeNotifier {
 
   void updateGameMode(SafetyGameMode mode) {
     if (engine.phase != GamePhase.ready || engine.config.mode == mode) return;
-    updateConfig(
-      GameConfig(
-        duration: engine.config.duration,
-        startCountdown: engine.config.startCountdown,
-        mode: mode,
-      ),
-    );
+    updateConfig(engine.config.copyWith(mode: mode));
+  }
+
+  void updateRedLightSettings(RedLightSettings settings) {
+    if (engine.phase != GamePhase.ready || !settings.isValid) return;
+    updateConfig(engine.config.copyWith(redLightSettings: settings));
+    _resetModeSession();
+  }
+
+  void updateCustomPoseSettings(CustomPoseSettings settings) {
+    if (engine.phase != GamePhase.ready || !settings.isValid) return;
+    updateConfig(engine.config.copyWith(customPoseSettings: settings));
+    _resetModeSession();
   }
 
   void updateEmsConfig(EmsConfig value) {
@@ -301,7 +312,7 @@ class GameCoordinator extends ChangeNotifier {
 
   void start() {
     if (!canStart) return;
-    modeSession.reset(engine.config.mode);
+    _resetModeSession();
     engine.start();
   }
 
@@ -316,7 +327,7 @@ class GameCoordinator extends ChangeNotifier {
     sample = null;
     _lastFrame = null;
     engine.reset();
-    modeSession.reset(engine.config.mode);
+    _resetModeSession();
     await camera.initialize();
   }
 
@@ -373,7 +384,16 @@ class GameCoordinator extends ChangeNotifier {
       ModeViolation.obstacle => TriggerReason.obstacle,
       ModeViolation.balance => TriggerReason.balance,
       ModeViolation.wrongZone => TriggerReason.wrongZone,
+      ModeViolation.customPose => TriggerReason.customPose,
     };
+  }
+
+  void _resetModeSession() {
+    modeSession.reset(
+      engine.config.mode,
+      redLight: engine.config.redLightSettings,
+      customPose: engine.config.customPoseSettings,
+    );
   }
 
   @override

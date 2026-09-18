@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
@@ -278,6 +279,34 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _gameModeSettings() async {
+    switch (c.engine.config.mode) {
+      case SafetyGameMode.redLightGreenLight:
+        final result = await showModalBottomSheet<RedLightSettings>(
+          context: context,
+          isScrollControlled: true,
+          useSafeArea: true,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+          ),
+          builder: (_) => _RedLightSettingsSheet(
+            settings: c.engine.config.redLightSettings,
+          ),
+        );
+        if (mounted && result != null) c.updateRedLightSettings(result);
+      case SafetyGameMode.customPose:
+        final result = await Navigator.of(context).push<CustomPoseSettings>(
+          MaterialPageRoute(
+            builder: (_) =>
+                _CustomPoseEditor(settings: c.engine.config.customPoseSettings),
+          ),
+        );
+        if (mounted && result != null) c.updateCustomPoseSettings(result);
+      default:
+        return;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final phase = c.engine.phase;
@@ -441,7 +470,11 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
                                     ),
                                   ),
                                 ),
-                                if (ready && !_counting) _ModeSelector(c: c),
+                                if (ready && !_counting)
+                                  _ModeSelector(
+                                    c: c,
+                                    onSettings: _gameModeSettings,
+                                  ),
                                 if (ready &&
                                     c.engine.config.mode.requiresRegion)
                                   _PreparationBar(c: c, enabled: !_counting),
@@ -454,13 +487,8 @@ class _GameHomeState extends State<GameHome> with WidgetsBindingObserver {
                                     onDuration: c.loading || _counting
                                         ? null
                                         : (duration) => c.updateConfig(
-                                            GameConfig(
+                                            c.engine.config.copyWith(
                                               duration: duration,
-                                              startCountdown: c
-                                                  .engine
-                                                  .config
-                                                  .startCountdown,
-                                              mode: c.engine.config.mode,
                                             ),
                                           ),
                                   )
@@ -884,38 +912,363 @@ class _TrackingBar extends StatelessWidget {
 }
 
 class _ModeSelector extends StatelessWidget {
-  const _ModeSelector({required this.c});
+  const _ModeSelector({required this.c, required this.onSettings});
   final GameCoordinator c;
+  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-    child: DropdownButtonFormField<SafetyGameMode>(
-      key: const ValueKey('game_mode_selector'),
-      initialValue: c.engine.config.mode,
-      isExpanded: true,
-      decoration: InputDecoration(
-        labelText: context.l10n.text('游戏模式'),
-        prefixIcon: const Icon(Icons.sports_esports_outlined),
-      ),
-      items: [
-        for (final mode in SafetyGameMode.values)
-          DropdownMenuItem(
-            value: mode,
-            child: Text(
-              context.l10n.text(mode.label),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+    child: Row(
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<SafetyGameMode>(
+            key: const ValueKey('game_mode_selector'),
+            initialValue: c.engine.config.mode,
+            isExpanded: true,
+            decoration: InputDecoration(
+              labelText: context.l10n.text('游戏模式'),
+              prefixIcon: const Icon(Icons.sports_esports_outlined),
             ),
+            items: [
+              for (final mode in SafetyGameMode.values)
+                DropdownMenuItem(
+                  value: mode,
+                  child: Text(
+                    context.l10n.text(mode.label),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            onChanged: c.loading || c.editing
+                ? null
+                : (mode) {
+                    if (mode != null) c.updateGameMode(mode);
+                  },
           ),
+        ),
+        if (c.engine.config.mode == SafetyGameMode.redLightGreenLight ||
+            c.engine.config.mode == SafetyGameMode.customPose) ...[
+          const SizedBox(width: 8),
+          IconButton.filledTonal(
+            key: const ValueKey('game_mode_settings'),
+            tooltip: context.l10n.text('模式设置'),
+            onPressed: onSettings,
+            icon: const Icon(Icons.tune),
+          ),
+        ],
       ],
-      onChanged: c.loading || c.editing
-          ? null
-          : (mode) {
-              if (mode != null) c.updateGameMode(mode);
-            },
     ),
   );
+}
+
+class _RedLightSettingsSheet extends StatefulWidget {
+  const _RedLightSettingsSheet({required this.settings});
+  final RedLightSettings settings;
+
+  @override
+  State<_RedLightSettingsSheet> createState() => _RedLightSettingsSheetState();
+}
+
+class _RedLightSettingsSheetState extends State<_RedLightSettingsSheet> {
+  late int _moveSeconds = widget.settings.moveSeconds;
+  late int _freezeSeconds = widget.settings.freezeSeconds;
+  late bool _randomized = widget.settings.randomized;
+
+  @override
+  Widget build(BuildContext context) => SingleChildScrollView(
+    padding: EdgeInsets.fromLTRB(
+      24,
+      24,
+      24,
+      MediaQuery.viewInsetsOf(context).bottom + 24,
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                context.l10n.text('木头人设置'),
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            IconButton(
+              tooltip: context.l10n.text('关闭设置'),
+              onPressed: () => Navigator.pop(context),
+              icon: const Icon(Icons.close),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _SecondsSlider(
+          key: const ValueKey('red_light_move_seconds'),
+          label: context.l10n.text('音乐可移动时间'),
+          seconds: _moveSeconds,
+          onChanged: (value) => setState(() => _moveSeconds = value),
+        ),
+        const SizedBox(height: 12),
+        _SecondsSlider(
+          key: const ValueKey('red_light_freeze_seconds'),
+          label: context.l10n.text('静止时间'),
+          seconds: _freezeSeconds,
+          onChanged: (value) => setState(() => _freezeSeconds = value),
+        ),
+        SwitchListTile(
+          key: const ValueKey('red_light_randomized'),
+          contentPadding: EdgeInsets.zero,
+          value: _randomized,
+          onChanged: (value) => setState(() => _randomized = value),
+          title: Text(context.l10n.text('每轮随机时间')),
+          subtitle: Text(context.l10n.text('每轮在 1 秒到设置秒数之间随机')),
+        ),
+        const SizedBox(height: 16),
+        FilledButton.icon(
+          key: const ValueKey('save_red_light_settings'),
+          onPressed: () => Navigator.pop(
+            context,
+            RedLightSettings(
+              moveSeconds: _moveSeconds,
+              freezeSeconds: _freezeSeconds,
+              randomized: _randomized,
+            ),
+          ),
+          icon: const Icon(Icons.check),
+          label: Text(context.l10n.text('保存')),
+        ),
+      ],
+    ),
+  );
+}
+
+class _SecondsSlider extends StatelessWidget {
+  const _SecondsSlider({
+    super.key,
+    required this.label,
+    required this.seconds,
+    required this.onChanged,
+  });
+  final String label;
+  final int seconds;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Row(
+        children: [
+          Expanded(child: Text(label)),
+          Text(
+            context.l10n.text('{value} 秒', {'value': seconds}),
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+      Slider(
+        value: seconds.toDouble(),
+        min: 1,
+        max: 60,
+        divisions: 59,
+        label: '$seconds s',
+        onChanged: (value) => onChanged(value.round()),
+      ),
+    ],
+  );
+}
+
+class _CustomPoseEditor extends StatefulWidget {
+  const _CustomPoseEditor({required this.settings});
+  final CustomPoseSettings settings;
+
+  @override
+  State<_CustomPoseEditor> createState() => _CustomPoseEditorState();
+}
+
+class _CustomPoseEditorState extends State<_CustomPoseEditor> {
+  late CustomPoseTemplate _template = widget.settings.template;
+  late int _graceSeconds = widget.settings.mismatchGrace.inSeconds;
+  Joint? _dragging;
+
+  void _startDrag(Offset local, Size size) {
+    Joint? nearest;
+    var distance = double.infinity;
+    for (final joint in customPoseJoints) {
+      final point = Offset(
+        _template.points[joint]!.dx * size.width,
+        _template.points[joint]!.dy * size.height,
+      );
+      final current = (point - local).distance;
+      if (current < distance) {
+        nearest = joint;
+        distance = current;
+      }
+    }
+    if (distance <= 36) setState(() => _dragging = nearest);
+  }
+
+  void _drag(Offset local, Size size) {
+    final joint = _dragging;
+    if (joint == null || size.isEmpty) return;
+    setState(
+      () => _template = _template.move(
+        joint,
+        Offset(local.dx / size.width, local.dy / size.height),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: Text(context.l10n.text('绘制目标姿势')),
+      actions: [
+        IconButton(
+          key: const ValueKey('reset_custom_pose'),
+          tooltip: context.l10n.text('恢复默认姿势'),
+          onPressed: () =>
+              setState(() => _template = CustomPoseTemplate.standard),
+          icon: const Icon(Icons.restart_alt),
+        ),
+      ],
+    ),
+    body: SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              context.l10n.text('拖动头、肩、肘、腕、髋、膝和脚踝关节点'),
+              style: const TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 12),
+            AspectRatio(
+              aspectRatio: 3 / 4,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: AppColors.camera,
+                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: LayoutBuilder(
+                  builder: (context, constraints) => RawGestureDetector(
+                    gestures: {
+                      EagerGestureRecognizer:
+                          GestureRecognizerFactoryWithHandlers<
+                            EagerGestureRecognizer
+                          >(EagerGestureRecognizer.new, (_) {}),
+                    },
+                    child: Listener(
+                      key: const ValueKey('custom_pose_canvas'),
+                      behavior: HitTestBehavior.opaque,
+                      onPointerDown: (details) => _startDrag(
+                        details.localPosition,
+                        constraints.biggest,
+                      ),
+                      onPointerMove: (details) =>
+                          _drag(details.localPosition, constraints.biggest),
+                      onPointerUp: (_) => setState(() => _dragging = null),
+                      onPointerCancel: (_) => setState(() => _dragging = null),
+                      child: CustomPaint(
+                        painter: _CustomPoseEditorPainter(
+                          template: _template,
+                          selected: _dragging,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              context.l10n.text('姿势不匹配超过此时间才触发'),
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            Slider(
+              key: const ValueKey('custom_pose_grace'),
+              value: _graceSeconds.toDouble(),
+              min: 1,
+              max: 30,
+              divisions: 29,
+              label: '$_graceSeconds s',
+              onChanged: (value) =>
+                  setState(() => _graceSeconds = value.round()),
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                context.l10n.text('{value} 秒', {'value': _graceSeconds}),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              key: const ValueKey('save_custom_pose'),
+              onPressed: () => Navigator.pop(
+                context,
+                CustomPoseSettings(
+                  template: _template,
+                  mismatchGrace: Duration(seconds: _graceSeconds),
+                ),
+              ),
+              icon: const Icon(Icons.check),
+              label: Text(context.l10n.text('保存目标姿势')),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _CustomPoseEditorPainter extends CustomPainter {
+  const _CustomPoseEditorPainter({required this.template, this.selected});
+  final CustomPoseTemplate template;
+  final Joint? selected;
+
+  Offset point(Joint joint, Size size) => Offset(
+    template.points[joint]!.dx * size.width,
+    template.points[joint]!.dy * size.height,
+  );
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final linePaint = Paint()
+      ..color = AppColors.cyan
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round;
+    for (final edge in customPoseEdges) {
+      canvas.drawLine(point(edge.$1, size), point(edge.$2, size), linePaint);
+    }
+    for (final joint in customPoseJoints) {
+      final center = point(joint, size);
+      final radius = joint == Joint.nose ? 22.0 : 10.0;
+      canvas.drawCircle(
+        center,
+        radius,
+        Paint()
+          ..color = joint == selected ? AppColors.yellow : AppColors.paper
+          ..style = PaintingStyle.fill,
+      );
+      canvas.drawCircle(
+        center,
+        radius,
+        Paint()
+          ..color = joint == selected ? AppColors.yellow : AppColors.cyan
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CustomPoseEditorPainter oldDelegate) =>
+      oldDelegate.template != template || oldDelegate.selected != selected;
 }
 
 class _SetupSummary extends StatelessWidget {
@@ -1075,6 +1428,27 @@ class _SessionStatus extends StatelessWidget {
             context.l10n.text(c.modeSession.prompt(c.engine.elapsed)),
             style: const TextStyle(fontWeight: FontWeight.w700),
           ),
+          if (c.engine.config.mode == SafetyGameMode.redLightGreenLight) ...[
+            const SizedBox(height: 4),
+            Text(
+              context.l10n.text('本阶段剩余 {seconds} 秒', {
+                'seconds': c.modeSession
+                    .lightPhaseRemaining(c.engine.elapsed)
+                    .inSeconds,
+              }),
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+          ],
+          if (c.engine.config.mode == SafetyGameMode.customPose) ...[
+            const SizedBox(height: 4),
+            Text(
+              context.l10n.text('持续不匹配 {seconds} 秒后触发', {
+                'seconds':
+                    c.engine.config.customPoseSettings.mismatchGrace.inSeconds,
+              }),
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+          ],
           const SizedBox(height: 8),
           Row(
             children: [
@@ -1133,6 +1507,8 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         ),
         startCountdown: Duration(seconds: int.parse(_countdown.text)),
         mode: widget.config.mode,
+        redLightSettings: widget.config.redLightSettings,
+        customPoseSettings: widget.config.customPoseSettings,
       ),
     );
   }
@@ -2025,6 +2401,7 @@ class _Results extends StatelessWidget {
         TriggerReason.obstacle => '碰到禁区',
         TriggerReason.balance => '失去平衡',
         TriggerReason.wrongZone => '进入错误区域',
+        TriggerReason.customPose => '未对齐目标姿势',
       });
 
   @override
