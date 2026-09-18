@@ -212,6 +212,9 @@ void main() {
         .map((value) => value['c'])
         .toSet();
     expect(zeroChannels, {0, 1});
+    final stoppedAt = transport.sent.length;
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    expect(transport.sent, hasLength(stoppedAt), reason: '错误状态必须停止心跳，等待用户明确重连');
   });
 
   test('V4 RPC 错误进入 fail-safe，清理错误不会递归发送', () async {

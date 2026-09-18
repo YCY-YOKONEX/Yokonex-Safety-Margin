@@ -593,7 +593,7 @@ class CoyoteDeviceController extends ChangeNotifier implements TriggerSink {
       _log('Error: $message');
       return;
     }
-    _safetyStopTimer?.cancel();
+    _cancelTimers();
     _outputToken++;
     final clientId = _clientId;
     final slotIds = _devices.values
