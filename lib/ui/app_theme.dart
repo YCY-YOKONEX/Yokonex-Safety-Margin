@@ -11,6 +11,7 @@ abstract final class AppColors {
   static const green = Color(0xFFD5C7BA);
   static const cyan = Color(0xFFA41424);
   static const alert = Color(0xFFD64550);
+  static const aligned = Color(0xFF49B983);
   static const yellow = Color(0xFFC89C5D);
   static const muted = Color(0xFF8C8582);
   static const camera = Color(0xFF020202);

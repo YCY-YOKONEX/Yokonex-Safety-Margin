@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:safety_margin/app/game_coordinator.dart';
 import 'package:safety_margin/domain/game_engine.dart';
+import 'package:safety_margin/domain/game_mode.dart';
 import 'package:safety_margin/domain/pose_sample.dart';
 import 'package:safety_margin/services/settings_store.dart';
 import '../support/fakes.dart';
@@ -34,6 +35,84 @@ void main() {
     expect(c.canStart, isTrue);
     c.start();
     expect(c.engine.phase, GamePhase.running);
+  });
+  test('现有姿态帧将左侧越界信息送入触发事件', () {
+    camera.emit(fullPose());
+    c.start();
+    camera.emit(fullPose(outside: true));
+    expect(c.engine.events.single.side, TriggerSide.left);
+  });
+  test('无需画区的模式可直接开始，双区违规进入统一触发链', () async {
+    c.dispose();
+    store = FakeSettingsStore(
+      const SavedSetup(
+        config: GameConfig(
+          startCountdown: Duration.zero,
+          mode: SafetyGameMode.poseChallenge,
+        ),
+        cameraId: 'front',
+      ),
+    );
+    c = GameCoordinator(
+      engine: GameEngine(sink: MemoryTriggerSink(), now: () => now),
+      cameraFactory: (readEpoch) => camera = FakePoseCamera(readEpoch),
+      store: store,
+      keepAwake: (_) async {},
+      autoTick: false,
+    );
+    await c.initialize();
+    camera.emit(fullPose());
+    expect(c.canStart, isTrue);
+
+    c.updateConfig(
+      const GameConfig(
+        startCountdown: Duration.zero,
+        mode: SafetyGameMode.dualZone,
+      ),
+    );
+    c.region = testRegion();
+    camera.emit(fullPose());
+    c.start();
+    final pose = fullPose();
+    camera.emit(
+      PoseSample({
+        ...pose.landmarks,
+        Joint.leftWrist: const Landmark(Offset(.75, .55), .95),
+      }),
+    );
+    expect(c.engine.events.single.reason, TriggerReason.wrongZone);
+    expect(c.engine.events.single.side, TriggerSide.left);
+    expect(c.engine.events.single.forceDirectional, isTrue);
+  });
+  test('自定义姿势超过配置时限后进入统一触发链', () async {
+    c.updateConfig(
+      const GameConfig(
+        startCountdown: Duration.zero,
+        mode: SafetyGameMode.customPose,
+        customPoseSettings: CustomPoseSettings(
+          mismatchGrace: Duration(seconds: 2),
+        ),
+      ),
+    );
+    final target = PoseSample({
+      for (final entry in CustomPoseTemplate.standard.points.entries)
+        entry.key: Landmark(entry.value, .95),
+    });
+    camera.emit(target);
+    c.start();
+    final wrong = PoseSample({
+      ...target.landmarks,
+      Joint.rightWrist: const Landmark(Offset(.05, .05), .95),
+    });
+    camera.emit(wrong);
+    expect(c.engine.events, isEmpty);
+    now += const Duration(seconds: 1);
+    camera.emit(wrong);
+    expect(c.engine.events, isEmpty);
+    now += const Duration(seconds: 1);
+    camera.emit(wrong);
+    expect(c.engine.events.single.reason, TriggerReason.customPose);
+    expect(c.engine.events.single.side, TriggerSide.right);
   });
   test('切换摄像头清空区域并保存', () async {
     camera.emit(fullPose());

@@ -62,4 +62,28 @@ void main() {
       TrackingStatus.inside,
     );
   });
+  test('越界侧别按现有左右监测关节判定', () {
+    expect(
+      PoseSample(
+        inside()..[Joint.leftWrist] = const Landmark(Offset(.96, .5), .9),
+      ).outsideSide(region),
+      TriggerSide.left,
+    );
+    expect(
+      PoseSample(
+        inside()..[Joint.rightAnkle] = const Landmark(Offset(.96, .5), .9),
+      ).outsideSide(region),
+      TriggerSide.right,
+    );
+    expect(
+      PoseSample(
+        inside()
+          ..[Joint.leftWrist] = const Landmark(Offset(.96, .5), .9)
+          ..[Joint.rightAnkle] = const Landmark(Offset(.96, .5), .9),
+      ).outsideSide(region),
+      TriggerSide.both,
+    );
+    expect(PoseSample.absent().outsideSide(region), TriggerSide.unknown);
+    expect(PoseSample(inside()).outsideSide(region), TriggerSide.unknown);
+  });
 }

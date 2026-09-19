@@ -2,8 +2,10 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../domain/activity_region.dart';
+import '../domain/coyote_protocol.dart';
 import '../domain/ems_protocol.dart';
 import '../domain/game_engine.dart';
+import 'output_device.dart';
 
 class SavedSetup {
   const SavedSetup({
@@ -11,11 +13,15 @@ class SavedSetup {
     this.region,
     this.cameraId,
     this.emsConfig = const EmsConfig(),
+    this.outputDeviceType = OutputDeviceType.yokonex,
+    this.coyoteConfig = const CoyoteConfig(),
   });
   final GameConfig config;
   final ActivityRegion? region;
   final String? cameraId;
   final EmsConfig emsConfig;
+  final OutputDeviceType outputDeviceType;
+  final CoyoteConfig coyoteConfig;
 }
 
 abstract interface class SettingsStore {
@@ -43,6 +49,16 @@ class LocalSettingsStore implements SettingsStore {
         emsConfig: json['emsConfig'] == null
             ? const EmsConfig()
             : EmsConfig.fromJson(json['emsConfig'] as Map<String, dynamic>),
+        outputDeviceType: json['outputDeviceType'] == null
+            ? OutputDeviceType.yokonex
+            : OutputDeviceType.values.byName(
+                json['outputDeviceType'] as String,
+              ),
+        coyoteConfig: json['coyoteConfig'] == null
+            ? const CoyoteConfig()
+            : CoyoteConfig.fromJson(
+                json['coyoteConfig'] as Map<String, dynamic>,
+              ),
       );
     } on Object {
       // 损坏或不兼容的本机记录不能阻止进入准备页。
@@ -57,6 +73,8 @@ class LocalSettingsStore implements SettingsStore {
       'region': setup.region?.toJson(),
       'cameraId': setup.cameraId,
       'emsConfig': setup.emsConfig.toJson(),
+      'outputDeviceType': setup.outputDeviceType.name,
+      'coyoteConfig': setup.coyoteConfig.toJson(),
     });
     final write = _writes.then((_) async {
       final prefs = await SharedPreferences.getInstance();

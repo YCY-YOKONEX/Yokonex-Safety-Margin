@@ -1,32 +1,71 @@
 import 'package:flutter/foundation.dart';
 
+import 'game_mode.dart';
 import 'pose_sample.dart';
 
 class GameConfig {
   const GameConfig({
     this.duration = const Duration(minutes: 5),
     this.startCountdown = const Duration(seconds: 5),
+    this.mode = SafetyGameMode.classic,
+    this.redLightSettings = const RedLightSettings(),
+    this.customPoseSettings = const CustomPoseSettings(),
   });
 
   final Duration duration;
   // 开始游戏后、正式进入判定前的准备倒计时；0 表示不倒计时直接开始。
   final Duration startCountdown;
+  final SafetyGameMode mode;
+  final RedLightSettings redLightSettings;
+  final CustomPoseSettings customPoseSettings;
 
   bool get isValid =>
       duration >= const Duration(seconds: 1) &&
       duration <= const Duration(hours: 24) &&
       startCountdown >= Duration.zero &&
-      startCountdown <= const Duration(seconds: 30);
+      startCountdown <= const Duration(seconds: 30) &&
+      redLightSettings.isValid &&
+      customPoseSettings.isValid;
+
+  GameConfig copyWith({
+    Duration? duration,
+    Duration? startCountdown,
+    SafetyGameMode? mode,
+    RedLightSettings? redLightSettings,
+    CustomPoseSettings? customPoseSettings,
+  }) => GameConfig(
+    duration: duration ?? this.duration,
+    startCountdown: startCountdown ?? this.startCountdown,
+    mode: mode ?? this.mode,
+    redLightSettings: redLightSettings ?? this.redLightSettings,
+    customPoseSettings: customPoseSettings ?? this.customPoseSettings,
+  );
 
   Map<String, Object> toJson() => {
     'durationSeconds': duration.inSeconds,
     'startCountdownSeconds': startCountdown.inSeconds,
+    'mode': mode.name,
+    'redLightSettings': redLightSettings.toJson(),
+    'customPoseSettings': customPoseSettings.toJson(),
   };
 
   factory GameConfig.fromJson(Map<String, dynamic> json) {
     final config = GameConfig(
       duration: Duration(seconds: json['durationSeconds'] as int),
       startCountdown: Duration(seconds: json['startCountdownSeconds'] as int),
+      mode: SafetyGameMode.values.byName(
+        json['mode'] as String? ?? SafetyGameMode.classic.name,
+      ),
+      redLightSettings: json['redLightSettings'] == null
+          ? const RedLightSettings()
+          : RedLightSettings.fromJson(
+              json['redLightSettings'] as Map<String, dynamic>,
+            ),
+      customPoseSettings: json['customPoseSettings'] == null
+          ? const CustomPoseSettings()
+          : CustomPoseSettings.fromJson(
+              json['customPoseSettings'] as Map<String, dynamic>,
+            ),
     );
     if (!config.isValid) throw const FormatException('游戏参数无效');
     return config;
@@ -37,7 +76,16 @@ enum GamePhase { ready, running, paused, finished }
 
 enum PauseReason { manual, background, cameraFault, outputFault }
 
-enum TriggerReason { outside, absent }
+enum TriggerReason {
+  outside,
+  absent,
+  movement,
+  pose,
+  obstacle,
+  balance,
+  wrongZone,
+  customPose,
+}
 
 class TriggerEvent {
   const TriggerEvent({
@@ -45,11 +93,111 @@ class TriggerEvent {
     required this.sequence,
     required this.elapsed,
     required this.reason,
+    this.side = TriggerSide.unknown,
+    this.forceDirectional = false,
+    this.recoveredAt,
   });
   final String sessionId;
   final int sequence;
   final Duration elapsed;
   final TriggerReason reason;
+  final TriggerSide side;
+  final bool forceDirectional;
+  final Duration? recoveredAt;
+
+  Duration durationUntil(Duration sessionDuration) {
+    final end = recoveredAt ?? sessionDuration;
+    return end > elapsed ? end - elapsed : Duration.zero;
+  }
+
+  TriggerEvent copyWith({Duration? recoveredAt}) => TriggerEvent(
+    sessionId: sessionId,
+    sequence: sequence,
+    elapsed: elapsed,
+    reason: reason,
+    side: side,
+    forceDirectional: forceDirectional,
+    recoveredAt: recoveredAt ?? this.recoveredAt,
+  );
+}
+
+class GameSessionStats {
+  const GameSessionStats({
+    required this.outsideCount,
+    required this.absentCount,
+    required this.leftCount,
+    required this.rightCount,
+    required this.bothCount,
+    required this.abnormalDuration,
+    required this.longestSafeDuration,
+  });
+
+  factory GameSessionStats.from(
+    List<TriggerEvent> events,
+    Duration sessionDuration,
+  ) {
+    var outsideCount = 0;
+    var absentCount = 0;
+    var leftCount = 0;
+    var rightCount = 0;
+    var bothCount = 0;
+    var abnormal = Duration.zero;
+    var longestSafe = Duration.zero;
+    var cursor = Duration.zero;
+    for (final event in events) {
+      if (event.reason == TriggerReason.absent) {
+        absentCount++;
+      } else {
+        outsideCount++;
+      }
+      switch (event.side) {
+        case TriggerSide.left:
+          leftCount++;
+        case TriggerSide.right:
+          rightCount++;
+        case TriggerSide.both:
+          bothCount++;
+        case TriggerSide.unknown:
+          break;
+      }
+      final start = event.elapsed < Duration.zero
+          ? Duration.zero
+          : event.elapsed > sessionDuration
+          ? sessionDuration
+          : event.elapsed;
+      if (start > cursor && start - cursor > longestSafe) {
+        longestSafe = start - cursor;
+      }
+      final rawEnd = event.recoveredAt ?? sessionDuration;
+      final end = rawEnd < start
+          ? start
+          : rawEnd > sessionDuration
+          ? sessionDuration
+          : rawEnd;
+      abnormal += end - start;
+      if (end > cursor) cursor = end;
+    }
+    if (sessionDuration > cursor && sessionDuration - cursor > longestSafe) {
+      longestSafe = sessionDuration - cursor;
+    }
+    return GameSessionStats(
+      outsideCount: outsideCount,
+      absentCount: absentCount,
+      leftCount: leftCount,
+      rightCount: rightCount,
+      bothCount: bothCount,
+      abnormalDuration: abnormal,
+      longestSafeDuration: longestSafe,
+    );
+  }
+
+  final int outsideCount;
+  final int absentCount;
+  final int leftCount;
+  final int rightCount;
+  final int bothCount;
+  final Duration abnormalDuration;
+  final Duration longestSafeDuration;
 }
 
 /// 输出接口只接受事件；设备适配器由后续协议接入。
@@ -104,7 +252,14 @@ class GameEngine extends ChangeNotifier {
 
   int get epoch => _epoch;
   List<TriggerEvent> get events => List.unmodifiable(_events);
+  GameSessionStats get stats => GameSessionStats.from(_events, elapsed);
   Duration get remaining => config.duration - elapsed;
+  Duration get liveElapsed {
+    if (phase != GamePhase.running || _lastTick == null) return elapsed;
+    final value = elapsed + (_now() - _lastTick!);
+    return value > config.duration ? config.duration : value;
+  }
+
   bool get triggering => _triggering;
   bool get _fresh =>
       _lastObservation != null && _now() - _lastObservation! < frameTimeout;
@@ -145,7 +300,13 @@ class GameEngine extends ChangeNotifier {
     return true;
   }
 
-  void acceptObservation(TrackingStatus status, {required int epoch}) {
+  void acceptObservation(
+    TrackingStatus status, {
+    required int epoch,
+    TriggerSide side = TriggerSide.unknown,
+    TriggerReason? reason,
+    bool forceDirectional = false,
+  }) {
     if (epoch != _epoch || phase == GamePhase.finished) return;
     final now = _now();
     _advance(now);
@@ -165,7 +326,9 @@ class GameEngine extends ChangeNotifier {
         case TrackingStatus.absent:
           _insideStart = null;
           _incompleteStart = null;
-          if (!_triggering) _trigger(status);
+          if (!_triggering) {
+            _trigger(status, side, reason, forceDirectional);
+          }
         // 跟踪不完整（关节被遮挡）给一段豁免时间；已经在触发中则不豁免，
         // 不能靠遮挡关节点中途逃避判定。超过豁免时间仍未恢复才按越界触发。
         case TrackingStatus.incomplete:
@@ -174,7 +337,9 @@ class GameEngine extends ChangeNotifier {
             _incompleteStart = null;
           } else {
             _incompleteStart ??= now;
-            if (now - _incompleteStart! >= incompleteGrace) _trigger(status);
+            if (now - _incompleteStart! >= incompleteGrace) {
+              _trigger(status, side, reason, forceDirectional);
+            }
           }
         case TrackingStatus.inside:
           _incompleteStart = null;
@@ -214,14 +379,23 @@ class GameEngine extends ChangeNotifier {
   }
 
   /// 越界（或识别不到人）后立即触发，设备端持续输出直到确认回到区域内。
-  void _trigger(TrackingStatus status) {
+  void _trigger(
+    TrackingStatus status,
+    TriggerSide side,
+    TriggerReason? reason,
+    bool forceDirectional,
+  ) {
     final event = TriggerEvent(
       sessionId: _sessionId,
       sequence: _events.length + 1,
       elapsed: elapsed,
-      reason: status == TrackingStatus.absent
-          ? TriggerReason.absent
-          : TriggerReason.outside,
+      reason:
+          reason ??
+          (status == TrackingStatus.absent
+              ? TriggerReason.absent
+              : TriggerReason.outside),
+      side: side,
+      forceDirectional: forceDirectional,
     );
     try {
       sink.emit(event);
@@ -233,6 +407,7 @@ class GameEngine extends ChangeNotifier {
   }
 
   void _stopTrigger() {
+    _closeActiveTrigger();
     _triggering = false;
     _insideStart = null;
     sink.reset();
@@ -241,6 +416,7 @@ class GameEngine extends ChangeNotifier {
   void pause(PauseReason reason) {
     _advance(_now());
     if (phase == GamePhase.finished) return;
+    _closeActiveTrigger();
     if (phase == GamePhase.running || phase == GamePhase.paused) {
       phase = GamePhase.paused;
       pauseReason = reason;
@@ -267,6 +443,7 @@ class GameEngine extends ChangeNotifier {
   }
 
   void _finish() {
+    _closeActiveTrigger();
     phase = GamePhase.finished;
     _epoch++;
     _lastTick = null;
@@ -286,5 +463,12 @@ class GameEngine extends ChangeNotifier {
     _triggering = false;
     _insideStart = null;
     _incompleteStart = null;
+  }
+
+  void _closeActiveTrigger() {
+    if (!_triggering || _events.isEmpty || _events.last.recoveredAt != null) {
+      return;
+    }
+    _events[_events.length - 1] = _events.last.copyWith(recoveredAt: elapsed);
   }
 }

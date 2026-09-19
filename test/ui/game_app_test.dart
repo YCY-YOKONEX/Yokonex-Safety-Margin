@@ -4,8 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:safety_margin/app/game_coordinator.dart';
 import 'package:safety_margin/domain/game_engine.dart';
+import 'package:safety_margin/domain/game_mode.dart';
 import 'package:safety_margin/domain/pose_sample.dart';
 import 'package:safety_margin/services/settings_store.dart';
+import 'package:safety_margin/services/coyote_device.dart';
+import 'package:safety_margin/services/coyote_transport.dart';
 import 'package:safety_margin/services/ems_device.dart';
 import 'package:safety_margin/ui/game_app.dart';
 import 'package:safety_margin/ui/app_localizations.dart';
@@ -41,6 +44,29 @@ class _WidgetEmsTransport implements EmsTransport {
     await linkController.close();
     await notificationController.close();
   }
+}
+
+class _WidgetCoyoteTransport implements CoyoteTransport {
+  final controller = StreamController<CoyoteTransportEvent>.broadcast(
+    sync: true,
+  );
+  int connects = 0;
+
+  @override
+  Stream<CoyoteTransportEvent> get events => controller.stream;
+
+  @override
+  Future<void> connect(Uri uri) async {
+    connects++;
+  }
+
+  @override
+  Future<void> send(Map<String, dynamic> frame) async {}
+
+  @override
+  Future<void> close() async {}
+
+  Future<void> dispose() => controller.close();
 }
 
 void main() {
@@ -157,6 +183,204 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
     expect(c.engine.phase, GamePhase.running);
+  });
+
+  testWidgets('可选择全部游戏模式且无需画区的模式可以开始', (tester) async {
+    late FakePoseCamera camera;
+    final store = FakeSettingsStore(
+      const SavedSetup(
+        config: GameConfig(
+          startCountdown: Duration.zero,
+          mode: SafetyGameMode.redLightGreenLight,
+        ),
+        cameraId: 'front',
+      ),
+    );
+    final c = GameCoordinator(
+      cameraFactory: (readEpoch) => camera = FakePoseCamera(readEpoch),
+      store: store,
+      keepAwake: (_) async {},
+      autoTick: false,
+    );
+    await tester.pumpWidget(SafetyMarginApp(coordinator: c));
+    await tester.pumpAndSettle();
+    camera.emit(fullPose());
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('game_mode_selector')), findsOneWidget);
+    expect(find.text('自由圈画'), findsNothing);
+    expect(c.canStart, isTrue);
+    await tester.tap(find.byKey(const ValueKey('game_mode_selector')));
+    await tester.pumpAndSettle();
+    for (final mode in SafetyGameMode.values) {
+      expect(find.text(mode.label), findsWidgets);
+    }
+    await tester.tap(find.text('闪避模式').last);
+    await tester.pumpAndSettle();
+    expect(c.engine.config.mode, SafetyGameMode.dodge);
+    expect(store.setup.config.mode, SafetyGameMode.dodge);
+    camera.emit(fullPose());
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('start_game')));
+    await tester.pumpAndSettle();
+    expect(c.engine.phase, GamePhase.running);
+    expect(find.text('闪避移动禁区'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('木头人可以保存移动、静止和随机设置', (tester) async {
+    late FakePoseCamera camera;
+    final store = FakeSettingsStore(
+      const SavedSetup(
+        config: GameConfig(mode: SafetyGameMode.redLightGreenLight),
+        cameraId: 'front',
+      ),
+    );
+    final c = GameCoordinator(
+      cameraFactory: (readEpoch) => camera = FakePoseCamera(readEpoch),
+      store: store,
+      keepAwake: (_) async {},
+      autoTick: false,
+    );
+    await tester.pumpWidget(SafetyMarginApp(coordinator: c));
+    await tester.pumpAndSettle();
+    camera.emit(fullPose());
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('game_mode_settings')));
+    await tester.pumpAndSettle();
+
+    final moveSlider = tester.widget<Slider>(
+      find.descendant(
+        of: find.byKey(const ValueKey('red_light_move_seconds')),
+        matching: find.byType(Slider),
+      ),
+    );
+    moveSlider.onChanged!(8);
+    final freezeSlider = tester.widget<Slider>(
+      find.descendant(
+        of: find.byKey(const ValueKey('red_light_freeze_seconds')),
+        matching: find.byType(Slider),
+      ),
+    );
+    freezeSlider.onChanged!(6);
+    await tester.tap(find.byKey(const ValueKey('red_light_randomized')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('save_red_light_settings')));
+    await tester.pumpAndSettle();
+
+    expect(c.engine.config.redLightSettings.moveSeconds, 8);
+    expect(c.engine.config.redLightSettings.freezeSeconds, 6);
+    expect(c.engine.config.redLightSettings.randomized, isTrue);
+    expect(store.setup.config.redLightSettings.randomized, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('自定义姿势编辑器可拖动关节点并保存超时', (tester) async {
+    late FakePoseCamera camera;
+    final store = FakeSettingsStore(
+      const SavedSetup(
+        config: GameConfig(mode: SafetyGameMode.customPose),
+        cameraId: 'front',
+      ),
+    );
+    final c = GameCoordinator(
+      cameraFactory: (readEpoch) => camera = FakePoseCamera(readEpoch),
+      store: store,
+      keepAwake: (_) async {},
+      autoTick: false,
+    );
+    await tester.pumpWidget(SafetyMarginApp(coordinator: c));
+    await tester.pumpAndSettle();
+    camera.emit(fullPose());
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('game_mode_settings')));
+    await tester.pumpAndSettle();
+
+    final canvas = find.byKey(const ValueKey('custom_pose_canvas'));
+    expect(
+      find.byKey(const ValueKey('custom_pose_live_status')),
+      findsOneWidget,
+    );
+    expect(find.text('姿势已对齐'), findsOneWidget);
+    expect(find.text('姿势预览不会触发设备输出'), findsOneWidget);
+    expect(c.engine.events, isEmpty);
+    final rect = tester.getRect(canvas);
+    final before =
+        c.engine.config.customPoseSettings.template.points[Joint.nose]!;
+    await tester.dragFrom(
+      Offset(
+        rect.left + rect.width * before.dx,
+        rect.top + rect.height * before.dy,
+      ),
+      const Offset(60, 0),
+    );
+    await tester.pump();
+    expect(find.textContaining('调整姿势'), findsOneWidget);
+    expect(c.engine.events, isEmpty);
+    final randomToggle = find.byKey(
+      const ValueKey('custom_pose_random_enabled'),
+    );
+    await tester.ensureVisible(randomToggle);
+    await tester.tap(randomToggle);
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('custom_pose_random_mode')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('custom_pose_random_time_mode')),
+      findsOneWidget,
+    );
+    final grace = tester.widget<Slider>(
+      find.byKey(const ValueKey('custom_pose_grace')),
+    );
+    grace.onChanged!(5);
+    await tester.pump();
+    await tester.ensureVisible(find.byKey(const ValueKey('save_custom_pose')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('save_custom_pose')));
+    await tester.pumpAndSettle();
+
+    final saved = c.engine.config.customPoseSettings;
+    expect(saved.mismatchGrace, const Duration(seconds: 5));
+    expect(saved.randomEnabled, isTrue);
+    expect(saved.template.points[Joint.nose], isNot(before));
+    expect(store.setup.config.customPoseSettings.mismatchGrace.inSeconds, 5);
+    expect(c.engine.events, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('结果页显示异常统计、方向和触发时间轴', (tester) async {
+    late FakePoseCamera camera;
+    final c = GameCoordinator(
+      cameraFactory: (readEpoch) => camera = FakePoseCamera(readEpoch),
+      store: FakeSettingsStore(
+        SavedSetup(
+          config: const GameConfig(startCountdown: Duration.zero),
+          region: testRegion(),
+          cameraId: 'front',
+        ),
+      ),
+      keepAwake: (_) async {},
+      autoTick: false,
+    );
+    await tester.pumpWidget(SafetyMarginApp(coordinator: c));
+    await tester.pumpAndSettle();
+    camera.emit(fullPose());
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('start_game')));
+    await tester.pumpAndSettle();
+    camera.emit(fullPose(outside: true));
+    await tester.pump();
+    c.finish();
+    await tester.pumpAndSettle();
+
+    expect(find.text('异常累计'), findsOneWidget);
+    expect(find.text('最长安全时段'), findsOneWidget);
+    expect(find.text('左侧 · 持续 00:00'), findsOneWidget);
+    expect(find.text('越界 1 · 离开 0'), findsOneWidget);
+    expect(find.text('左 1 · 右 0 · 双侧 0'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('越界或跟踪异常时显示屏幕四周红光，恢复后消失', (tester) async {
@@ -396,6 +620,58 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
     await transport.close();
+  });
+
+  testWidgets('切换到 DG-LAB 后点击连接会显示官方配对二维码和安全控件', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final emsTransport = _WidgetEmsTransport();
+    final coyoteTransport = _WidgetCoyoteTransport();
+    final c = GameCoordinator(
+      ems: EmsDeviceController(transport: emsTransport),
+      coyote: CoyoteDeviceController(transport: coyoteTransport),
+      cameraFactory: (epoch) => FakePoseCamera(epoch),
+      store: FakeSettingsStore(),
+      keepAwake: (_) async {},
+      autoTick: false,
+    );
+    await tester.pumpWidget(SafetyMarginApp(coordinator: c));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('EMS 设备'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('DG-LAB Coyote'));
+    await tester.pumpAndSettle();
+    expect(find.text('DG-LAB Coyote 3.0'), findsOneWidget);
+    expect(find.byKey(const ValueKey('coyote_channel')), findsOneWidget);
+    expect(find.byKey(const ValueKey('coyote_waveform')), findsOneWidget);
+    expect(find.text('最大允许强度'), findsOneWidget);
+    expect(find.byKey(const ValueKey('coyote_emergency_stop')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('coyote_connect')));
+    await tester.pump();
+    expect(coyoteTransport.connects, 1);
+    coyoteTransport.controller.add(
+      const CoyoteTransportMessage({
+        'type': 'hello',
+        'clientId': 'controller-id',
+      }),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('等待扫码'), findsOneWidget);
+    expect(find.byKey(const ValueKey('coyote_qr')), findsOneWidget);
+    expect(find.byKey(const ValueKey('coyote_open_app')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('coyote_directional_mapping')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await emsTransport.close();
+    await coyoteTransport.dispose();
   });
 
   testWidgets('可切换九种外语且核心文案完整显示', (tester) async {

@@ -12,6 +12,7 @@ class FakeEmsTransport implements EmsTransport {
   final writes = <List<int>>[];
   int permissionRequests = 0;
   Object? writeError;
+  Completer<void>? blockNextWrite;
 
   @override
   Future<void> requestPermissions() async {
@@ -31,6 +32,9 @@ class FakeEmsTransport implements EmsTransport {
   @override
   Future<void> write(String deviceId, List<int> value) async {
     if (writeError != null) throw writeError!;
+    final blocker = blockNextWrite;
+    blockNextWrite = null;
+    await blocker?.future;
     writes.add(List.of(value));
   }
 
@@ -285,6 +289,42 @@ void main() {
     transport.linkController.add(EmsLinkState.connected);
     await Future<void>.delayed(Duration.zero);
     expect(() => device.emit(event), throwsStateError);
+  });
+
+  test('断开会取消未发送的 A/B 波形，并保证关闭输出是最后一批写入', () async {
+    const peripheral = EmsPeripheral(id: 'ems', name: 'YYC-DJ-1234', rssi: -30);
+    await device.connect(peripheral);
+    transport.linkController.add(EmsLinkState.connected);
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    device.configure(device.config.copyWith(intensityA: 20, intensityB: 20));
+    await Future<void>.delayed(Duration.zero);
+    transport.writes.clear();
+
+    final blocker = Completer<void>();
+    transport.blockNextWrite = blocker;
+    device.emit(
+      const TriggerEvent(
+        sessionId: 'disconnect-safety',
+        sequence: 1,
+        elapsed: Duration.zero,
+        reason: TriggerReason.outside,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    final disconnecting = device.disconnect();
+    await Future<void>.delayed(Duration.zero);
+    expect(transport.writes, isEmpty);
+
+    blocker.complete();
+    await disconnecting;
+    expect(transport.writes, isNotEmpty);
+    final firstClose = transport.writes.indexWhere((packet) => packet[3] == 0);
+    expect(firstClose, greaterThanOrEqualTo(0));
+    expect(
+      transport.writes.skip(firstClose).every((packet) => packet[3] == 0),
+      isTrue,
+    );
+    expect(transport.writes.skip(firstClose), hasLength(2));
   });
 
   test('发送失败上报故障', () async {
