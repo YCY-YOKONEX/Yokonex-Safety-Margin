@@ -317,6 +317,20 @@ void main() {
     await tester.pump();
     expect(find.textContaining('调整姿势'), findsOneWidget);
     expect(c.engine.events, isEmpty);
+    final randomToggle = find.byKey(
+      const ValueKey('custom_pose_random_enabled'),
+    );
+    await tester.ensureVisible(randomToggle);
+    await tester.tap(randomToggle);
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('custom_pose_random_mode')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('custom_pose_random_time_mode')),
+      findsOneWidget,
+    );
     final grace = tester.widget<Slider>(
       find.byKey(const ValueKey('custom_pose_grace')),
     );
@@ -329,6 +343,7 @@ void main() {
 
     final saved = c.engine.config.customPoseSettings;
     expect(saved.mismatchGrace, const Duration(seconds: 5));
+    expect(saved.randomEnabled, isTrue);
     expect(saved.template.points[Joint.nose], isNot(before));
     expect(store.setup.config.customPoseSettings.mismatchGrace.inSeconds, 5);
     expect(c.engine.events, isEmpty);

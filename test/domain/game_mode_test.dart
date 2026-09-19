@@ -280,4 +280,60 @@ void main() {
       TrackingStatus.inside,
     );
   });
+
+  test('自定义姿势随机预设包含几十个有效姿势并支持四种手部策略', () {
+    expect(customPosePresets.length, greaterThanOrEqualTo(32));
+    expect(customPosePresets.every((pose) => pose.isValid), isTrue);
+    for (final mode in CustomPoseRandomMode.values) {
+      final pose = randomCustomPose(mode, 3);
+      expect(pose.isValid, isTrue);
+      switch (mode) {
+        case CustomPoseRandomMode.fullBody:
+          expect(pose.points[Joint.leftWrist]!.dy, greaterThan(.03));
+        case CustomPoseRandomMode.handsBehindBack:
+          expect(pose.points[Joint.leftWrist]!.dx, closeTo(.53, .1));
+          expect(pose.points[Joint.rightWrist]!.dx, closeTo(.47, .1));
+        case CustomPoseRandomMode.handsTogetherRaised:
+          expect(pose.points[Joint.leftWrist]!.dy, lessThan(.12));
+          expect(pose.points[Joint.rightWrist]!.dy, lessThan(.12));
+        case CustomPoseRandomMode.handsRaisedSides:
+          expect(pose.points[Joint.leftWrist]!.dx, lessThan(.25));
+          expect(pose.points[Joint.rightWrist]!.dx, greaterThan(.75));
+      }
+    }
+  });
+
+  test('随机姿势按固定间隔切换，范围时间限制为 1 至 300 秒', () {
+    const settings = CustomPoseSettings(
+      randomEnabled: true,
+      randomMode: CustomPoseRandomMode.handsTogetherRaised,
+      randomMinSeconds: 1,
+      randomMaxSeconds: 1,
+    );
+    expect(settings.isValid, isTrue);
+    final restored = CustomPoseSettings.fromJson(
+      Map<String, dynamic>.from(settings.toJson()),
+    );
+    expect(restored.randomEnabled, isTrue);
+    expect(restored.randomMode, CustomPoseRandomMode.handsTogetherRaised);
+    expect(restored.randomMinSeconds, 1);
+    expect(restored.randomMaxSeconds, 1);
+    final session = GameModeSession()
+      ..reset(SafetyGameMode.customPose, customPose: settings);
+    final first = session.customPoseTemplate;
+    final sample = PoseSample({
+      for (final entry in first.points.entries)
+        entry.key: Landmark(entry.value, .95),
+    });
+    session.evaluate(sample, null, Duration.zero, const Duration(minutes: 5));
+    session.evaluate(
+      sample,
+      null,
+      const Duration(seconds: 1),
+      const Duration(minutes: 5),
+    );
+    expect(session.customPoseTemplate.isValid, isTrue);
+    expect(const CustomPoseSettings(randomMinSeconds: 0).isValid, isFalse);
+    expect(const CustomPoseSettings(randomMaxSeconds: 301).isValid, isFalse);
+  });
 }

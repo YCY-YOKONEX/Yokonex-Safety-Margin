@@ -106,7 +106,7 @@ class GameCoordinator extends ChangeNotifier {
 
   CustomPoseTemplate? get customPoseTemplate =>
       engine.config.mode == SafetyGameMode.customPose
-      ? engine.config.customPoseSettings.template
+      ? modeSession.customPoseTemplate
       : null;
 
   Future<void> initialize() async {

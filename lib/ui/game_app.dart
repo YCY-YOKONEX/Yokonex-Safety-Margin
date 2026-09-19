@@ -1095,6 +1095,12 @@ class _CustomPoseEditor extends StatefulWidget {
 class _CustomPoseEditorState extends State<_CustomPoseEditor> {
   late CustomPoseTemplate _template = widget.settings.template;
   late int _graceSeconds = widget.settings.mismatchGrace.inSeconds;
+  late bool _randomEnabled = widget.settings.randomEnabled;
+  late CustomPoseRandomMode _randomMode = widget.settings.randomMode;
+  late bool _randomTimeRange =
+      widget.settings.randomMinSeconds != widget.settings.randomMaxSeconds;
+  late int _randomMinSeconds = widget.settings.randomMinSeconds;
+  late int _randomMaxSeconds = widget.settings.randomMaxSeconds;
   final Stopwatch _previewClock = Stopwatch()..start();
   Duration? _mismatchStarted;
   Joint? _dragging;
@@ -1175,6 +1181,20 @@ class _CustomPoseEditorState extends State<_CustomPoseEditor> {
     if (!complete) return context.l10n.text('身体识别不完整');
     return context.l10n.text('调整姿势 · {seconds} 秒后触发', {
       'seconds': _remainingSeconds,
+    });
+  }
+
+  void _setRandomMin(int value) {
+    final min = value.clamp(1, _randomTimeRange ? _randomMaxSeconds : 300);
+    setState(() {
+      _randomMinSeconds = min;
+      if (!_randomTimeRange) _randomMaxSeconds = min;
+    });
+  }
+
+  void _setRandomMax(int value) {
+    setState(() {
+      _randomMaxSeconds = value.clamp(_randomMinSeconds, 300);
     });
   }
 
@@ -1380,6 +1400,93 @@ class _CustomPoseEditorState extends State<_CustomPoseEditor> {
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
             ),
+            const SizedBox(height: 24),
+            SwitchListTile.adaptive(
+              key: const ValueKey('custom_pose_random_enabled'),
+              contentPadding: EdgeInsets.zero,
+              title: Text(context.l10n.text('随机变化姿势')),
+              subtitle: Text(context.l10n.text('打开后，游戏中会按设定时间切换目标姿势')),
+              value: _randomEnabled,
+              onChanged: (value) => setState(() => _randomEnabled = value),
+            ),
+            if (_randomEnabled) ...[
+              const SizedBox(height: 8),
+              DropdownButtonFormField<CustomPoseRandomMode>(
+                key: const ValueKey('custom_pose_random_mode'),
+                initialValue: _randomMode,
+                decoration: InputDecoration(
+                  labelText: context.l10n.text('随机姿势类型'),
+                ),
+                items: [
+                  for (final mode in CustomPoseRandomMode.values)
+                    DropdownMenuItem(
+                      value: mode,
+                      child: Text(context.l10n.text(mode.label)),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value != null) setState(() => _randomMode = value);
+                },
+              ),
+              const SizedBox(height: 14),
+              SegmentedButton<bool>(
+                key: const ValueKey('custom_pose_random_time_mode'),
+                segments: [
+                  ButtonSegment(
+                    value: false,
+                    label: Text(context.l10n.text('固定时间')),
+                  ),
+                  ButtonSegment(
+                    value: true,
+                    label: Text(context.l10n.text('随机范围')),
+                  ),
+                ],
+                selected: {_randomTimeRange},
+                onSelectionChanged: (values) {
+                  final range = values.first;
+                  setState(() {
+                    _randomTimeRange = range;
+                    if (!range) _randomMaxSeconds = _randomMinSeconds;
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
+              Text(
+                context.l10n.text(
+                  _randomTimeRange ? '每次变化间隔（1 至 300 秒）' : '姿势变化间隔（1 至 300 秒）',
+                ),
+                style: const TextStyle(color: AppColors.muted),
+              ),
+              Slider(
+                key: const ValueKey('custom_pose_random_min'),
+                value: _randomMinSeconds.toDouble(),
+                min: 1,
+                max: _randomTimeRange ? _randomMaxSeconds.toDouble() : 300,
+                label: '$_randomMinSeconds s',
+                onChanged: (value) => _setRandomMin(value.round()),
+              ),
+              if (_randomTimeRange)
+                Slider(
+                  key: const ValueKey('custom_pose_random_max'),
+                  value: _randomMaxSeconds.toDouble(),
+                  min: _randomMinSeconds.toDouble(),
+                  max: 300,
+                  label: '$_randomMaxSeconds s',
+                  onChanged: (value) => _setRandomMax(value.round()),
+                ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  context.l10n.text(
+                    _randomTimeRange ? '{min} 至 {max} 秒' : '{value} 秒',
+                    _randomTimeRange
+                        ? {'min': _randomMinSeconds, 'max': _randomMaxSeconds}
+                        : {'value': _randomMinSeconds},
+                  ),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             FilledButton.icon(
               key: const ValueKey('save_custom_pose'),
@@ -1388,6 +1495,12 @@ class _CustomPoseEditorState extends State<_CustomPoseEditor> {
                 CustomPoseSettings(
                   template: _template,
                   mismatchGrace: Duration(seconds: _graceSeconds),
+                  randomEnabled: _randomEnabled,
+                  randomMode: _randomMode,
+                  randomMinSeconds: _randomMinSeconds,
+                  randomMaxSeconds: _randomTimeRange
+                      ? _randomMaxSeconds
+                      : _randomMinSeconds,
                 ),
               ),
               icon: const Icon(Icons.check),

@@ -164,24 +164,129 @@ class CustomPoseTemplate {
   }
 }
 
+enum CustomPoseRandomMode {
+  fullBody,
+  handsBehindBack,
+  handsTogetherRaised,
+  handsRaisedSides,
+}
+
+extension CustomPoseRandomModeInfo on CustomPoseRandomMode {
+  String get label => switch (this) {
+    CustomPoseRandomMode.fullBody => '全身随机',
+    CustomPoseRandomMode.handsBehindBack => '手放背后，其余部位随机',
+    CustomPoseRandomMode.handsTogetherRaised => '双手合并举高，其余部位随机',
+    CustomPoseRandomMode.handsRaisedSides => '双手左右抬高，其余部位随机',
+  };
+}
+
+CustomPoseTemplate _randomPoseTemplate(CustomPoseRandomMode mode, int variant) {
+  final phase = variant % 8;
+  final lean = ((variant ~/ 8) - 1) * .035;
+  final knee = switch (phase % 4) {
+    0 => .72,
+    1 => .64,
+    2 => .80,
+    _ => .70,
+  };
+  final leftKnee = Offset(.40 + lean, knee);
+  final rightKnee = Offset(.60 + lean, knee - (phase.isOdd ? .06 : 0));
+  final leftAnkle = Offset(.34 + lean, phase % 3 == 0 ? .91 : .84);
+  final rightAnkle = Offset(.66 + lean, phase % 3 == 1 ? .91 : .84);
+  final shoulderY = phase % 3 == 0 ? .27 : .31;
+  final hipY = phase % 2 == 0 ? .53 : .57;
+  final leftElbow = switch (phase % 4) {
+    0 => Offset(.28 + lean, .43),
+    1 => Offset(.35 + lean, .36),
+    2 => Offset(.25 + lean, .34),
+    _ => Offset(.34 + lean, .49),
+  };
+  final rightElbow = switch (phase % 4) {
+    0 => Offset(.72 + lean, .43),
+    1 => Offset(.65 + lean, .50),
+    2 => Offset(.75 + lean, .36),
+    _ => Offset(.66 + lean, .32),
+  };
+  final standard = <Joint, Offset>{
+    Joint.nose: Offset(.50 + lean, .15 + (phase % 2) * .015),
+    Joint.leftShoulder: Offset(.40 + lean, shoulderY),
+    Joint.rightShoulder: Offset(.60 + lean, shoulderY),
+    Joint.leftElbow: leftElbow,
+    Joint.rightElbow: rightElbow,
+    Joint.leftWrist: Offset(.20 + lean, .56),
+    Joint.rightWrist: Offset(.80 + lean, .56),
+    Joint.leftHip: Offset(.44 + lean, hipY),
+    Joint.rightHip: Offset(.56 + lean, hipY),
+    Joint.leftKnee: leftKnee,
+    Joint.rightKnee: rightKnee,
+    Joint.leftAnkle: leftAnkle,
+    Joint.rightAnkle: rightAnkle,
+  };
+  switch (mode) {
+    case CustomPoseRandomMode.fullBody:
+      break;
+    case CustomPoseRandomMode.handsBehindBack:
+      standard[Joint.leftElbow] = Offset(.45 + lean, .42);
+      standard[Joint.rightElbow] = Offset(.55 + lean, .42);
+      standard[Joint.leftWrist] = Offset(.53 + lean, .49);
+      standard[Joint.rightWrist] = Offset(.47 + lean, .49);
+    case CustomPoseRandomMode.handsTogetherRaised:
+      standard[Joint.leftElbow] = Offset(.36 + lean, .30);
+      standard[Joint.rightElbow] = Offset(.64 + lean, .30);
+      standard[Joint.leftWrist] = Offset(.47 + lean, .08);
+      standard[Joint.rightWrist] = Offset(.53 + lean, .08);
+    case CustomPoseRandomMode.handsRaisedSides:
+      standard[Joint.leftElbow] = Offset(.27 + lean, .21);
+      standard[Joint.rightElbow] = Offset(.73 + lean, .21);
+      standard[Joint.leftWrist] = Offset(.17 + lean, .08);
+      standard[Joint.rightWrist] = Offset(.83 + lean, .08);
+  }
+  return CustomPoseTemplate(standard);
+}
+
+/// 32 个内置安全姿势：4 种随机策略 × 8 组躯干/腿部变化。
+final customPosePresets = List.unmodifiable([
+  for (final mode in CustomPoseRandomMode.values)
+    for (var variant = 0; variant < 8; variant++)
+      _randomPoseTemplate(mode, variant),
+]);
+
+CustomPoseTemplate randomCustomPose(CustomPoseRandomMode mode, int variant) =>
+    _randomPoseTemplate(mode, variant);
+
 class CustomPoseSettings {
   const CustomPoseSettings({
     this.template = CustomPoseTemplate.standard,
     this.mismatchGrace = const Duration(seconds: 3),
+    this.randomEnabled = false,
+    this.randomMode = CustomPoseRandomMode.fullBody,
+    this.randomMinSeconds = 5,
+    this.randomMaxSeconds = 5,
   });
 
   static const tolerance = .075;
   final CustomPoseTemplate template;
   final Duration mismatchGrace;
+  final bool randomEnabled;
+  final CustomPoseRandomMode randomMode;
+  final int randomMinSeconds;
+  final int randomMaxSeconds;
 
   bool get isValid =>
       template.isValid &&
       mismatchGrace >= const Duration(seconds: 1) &&
-      mismatchGrace <= const Duration(seconds: 30);
+      mismatchGrace <= const Duration(seconds: 30) &&
+      randomMinSeconds >= 1 &&
+      randomMaxSeconds >= randomMinSeconds &&
+      randomMaxSeconds <= 300;
 
   Map<String, Object> toJson() => {
     'template': template.toJson(),
     'mismatchGraceMilliseconds': mismatchGrace.inMilliseconds,
+    'randomEnabled': randomEnabled,
+    'randomMode': randomMode.name,
+    'randomMinSeconds': randomMinSeconds,
+    'randomMaxSeconds': randomMaxSeconds,
   };
 
   factory CustomPoseSettings.fromJson(Map<String, dynamic> json) {
@@ -194,6 +299,14 @@ class CustomPoseSettings {
       mismatchGrace: Duration(
         milliseconds: json['mismatchGraceMilliseconds'] as int? ?? 3000,
       ),
+      randomEnabled: json['randomEnabled'] as bool? ?? false,
+      randomMode: CustomPoseRandomMode.values.byName(
+        json['randomMode'] as String? ?? CustomPoseRandomMode.fullBody.name,
+      ),
+      randomMinSeconds: json['randomMinSeconds'] as int? ?? 5,
+      randomMaxSeconds:
+          json['randomMaxSeconds'] as int? ??
+          (json['randomMinSeconds'] as int? ?? 5),
     );
     if (!result.isValid) throw const FormatException('自定义姿势参数无效');
     return result;
@@ -292,10 +405,13 @@ class GameModeSession {
   bool _violationActive = false;
   RedLightSettings redLightSettings = const RedLightSettings();
   CustomPoseSettings customPoseSettings = const CustomPoseSettings();
+  CustomPoseTemplate customPoseTemplate = CustomPoseTemplate.standard;
   bool _greenLight = true;
   Duration _lightPhaseStarted = Duration.zero;
   Duration _lightPhaseDuration = const Duration(seconds: 5);
   Duration? _customMismatchStarted;
+  Duration _customNextChangeAt = Duration.zero;
+  int _customPresetIndex = 0;
 
   bool get hasScore => switch (mode) {
     SafetyGameMode.poseChallenge ||
@@ -312,6 +428,7 @@ class GameModeSession {
     mode = value;
     redLightSettings = redLight;
     customPoseSettings = customPose;
+    customPoseTemplate = customPose.template;
     challenge = null;
     score = 0;
     combo = 0;
@@ -328,6 +445,16 @@ class GameModeSession {
     _lightPhaseStarted = Duration.zero;
     _lightPhaseDuration = _nextLightDuration(green: true);
     _customMismatchStarted = null;
+    _customPresetIndex = _random.nextInt(customPosePresets.length);
+    _customNextChangeAt = customPose.randomEnabled
+        ? _nextCustomPoseChangeAt(Duration.zero)
+        : Duration.zero;
+    if (customPose.randomEnabled) {
+      customPoseTemplate = randomCustomPose(
+        customPose.randomMode,
+        _customPresetIndex,
+      );
+    }
     if (mode == SafetyGameMode.poseChallenge || mode == SafetyGameMode.combo) {
       _pickChallenge();
     }
@@ -484,12 +611,10 @@ class GameModeSession {
   }
 
   ModeObservation _customPoseObservation(PoseSample sample, Duration elapsed) {
+    _advanceCustomPose(elapsed);
     var left = false;
     var right = false;
-    final jointMatches = customPoseJointMatches(
-      sample,
-      customPoseSettings.template,
-    );
+    final jointMatches = customPoseJointMatches(sample, customPoseTemplate);
     for (final joint in customPoseJoints) {
       if (!jointMatches[joint]!) {
         if (leftMonitoredJoints.contains(joint)) left = true;
@@ -514,6 +639,32 @@ class GameModeSession {
       violation: ModeViolation.customPose,
     );
   }
+
+  void _advanceCustomPose(Duration elapsed) {
+    if (!customPoseSettings.randomEnabled ||
+        _customNextChangeAt == Duration.zero) {
+      return;
+    }
+    while (elapsed >= _customNextChangeAt) {
+      _customPresetIndex = _random.nextInt(customPosePresets.length);
+      customPoseTemplate = randomCustomPose(
+        customPoseSettings.randomMode,
+        _customPresetIndex,
+      );
+      _customMismatchStarted = null;
+      _customNextChangeAt += _nextCustomPoseInterval();
+    }
+  }
+
+  Duration _nextCustomPoseInterval() {
+    final min = customPoseSettings.randomMinSeconds;
+    final max = customPoseSettings.randomMaxSeconds;
+    final seconds = min == max ? min : min + _random.nextInt(max - min + 1);
+    return Duration(seconds: seconds);
+  }
+
+  Duration _nextCustomPoseChangeAt(Duration elapsed) =>
+      elapsed + _nextCustomPoseInterval();
 
   ModeObservation _challengeObservation(
     PoseSample sample,
