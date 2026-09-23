@@ -78,6 +78,22 @@ class ActivityRegion {
   final RegionMode mode;
   final List<Offset> points;
 
+  Rect get bounds {
+    var result = Rect.fromPoints(points.first, points.first);
+    for (final point in points.skip(1)) {
+      result = result.expandToInclude(Rect.fromPoints(point, point));
+    }
+    return result;
+  }
+
+  ActivityRegion scaled(double factor) {
+    final safeFactor = factor.clamp(.05, 1.0);
+    final center = bounds.center;
+    return ActivityRegion._validated(mode, [
+      for (final point in points) center + (point - center) * safeFactor,
+    ]);
+  }
+
   bool contains(Offset point) {
     if (!point.dx.isFinite || !point.dy.isFinite) return false;
     var inside = false;

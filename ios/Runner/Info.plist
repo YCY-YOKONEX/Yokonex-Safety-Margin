@@ -30,6 +30,13 @@
 	<string>使用摄像头识别人体骨骼并判断活动区域，图像仅在本机处理。</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>连接 EMS 设备并发送本局触发波形。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>在局域网中启动 DG-LAB V4 服务并与官方 App 配对。</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

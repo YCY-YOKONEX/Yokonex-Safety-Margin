@@ -42,20 +42,25 @@ enum Joint {
   rightFootIndex,
 }
 
-const monitoredJoints = {
+const leftMonitoredJoints = {
   Joint.leftShoulder,
-  Joint.rightShoulder,
   Joint.leftElbow,
-  Joint.rightElbow,
   Joint.leftWrist,
-  Joint.rightWrist,
   Joint.leftHip,
-  Joint.rightHip,
   Joint.leftKnee,
-  Joint.rightKnee,
   Joint.leftAnkle,
+};
+
+const rightMonitoredJoints = {
+  Joint.rightShoulder,
+  Joint.rightElbow,
+  Joint.rightWrist,
+  Joint.rightHip,
+  Joint.rightKnee,
   Joint.rightAnkle,
 };
+
+const monitoredJoints = {...leftMonitoredJoints, ...rightMonitoredJoints};
 
 const skeletonEdges = [
   (Joint.leftEar, Joint.leftEye),
@@ -96,6 +101,8 @@ class Landmark {
 
 enum TrackingStatus { waiting, inside, outside, absent, incomplete }
 
+enum TriggerSide { unknown, left, right, both }
+
 class PoseSample {
   PoseSample(Map<Joint, Landmark> landmarks, {this.personDetected = true})
     : landmarks = Map.unmodifiable(landmarks);
@@ -121,5 +128,25 @@ class PoseSample {
       }
     }
     return complete ? TrackingStatus.inside : TrackingStatus.incomplete;
+  }
+
+  TriggerSide outsideSide(ActivityRegion? region) {
+    if (region == null || !personDetected) return TriggerSide.unknown;
+    var left = false;
+    var right = false;
+    for (final joint in monitoredJoints) {
+      final point = landmarks[joint];
+      if (point == null ||
+          !point.isReliable ||
+          region.containsWithMargin(point.position, boundaryTolerance)) {
+        continue;
+      }
+      if (leftMonitoredJoints.contains(joint)) left = true;
+      if (rightMonitoredJoints.contains(joint)) right = true;
+    }
+    if (left && right) return TriggerSide.both;
+    if (left) return TriggerSide.left;
+    if (right) return TriggerSide.right;
+    return TriggerSide.unknown;
   }
 }

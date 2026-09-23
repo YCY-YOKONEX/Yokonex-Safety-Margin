@@ -8,7 +8,7 @@ import '../support/fakes.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   for (final mirrored in [false, true]) {
-    test('只绘制活动区域，不显示人体骨架与关键点 mirror=$mirrored', () async {
+    test('所有模式的相机叠加层绘制实时人体骨架 mirror=$mirrored', () async {
       const size = ui.Size(300, 400);
       final transform = PreviewTransform(
         imageSize: size,
@@ -21,6 +21,7 @@ void main() {
       PoseOverlayPainter(
         transform: transform,
         region: testRegion(),
+        sample: fullPose(),
       ).paint(canvas, size);
       final picture = recorder.endRecording();
       final image = await picture.toImage(300, 400);
@@ -44,6 +45,7 @@ void main() {
         pixel(const ui.Offset(.72, .55)),
         isNot(AppColors.cyan.toARGB32()),
       );
+      expect(pixel(const ui.Offset(.38, .28)), AppColors.aligned.toARGB32());
       expect(pixel(const ui.Offset(.1, .3)), AppColors.cage.toARGB32());
       image.dispose();
       picture.dispose();

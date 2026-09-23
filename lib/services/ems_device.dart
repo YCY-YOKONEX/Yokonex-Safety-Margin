@@ -291,12 +291,11 @@ class EmsDeviceController extends ChangeNotifier implements TriggerSink {
     _outputToken++;
     if (connectedDevice != null) {
       try {
-        for (final packet in EmsProtocol.fixedModePacket(
-          config,
-          enabled: false,
-        )) {
-          await _writeNow(packet);
-        }
+        // 关闭包作为一个原子批次排到所有写入之后；旧输出批次因 token
+        // 失效会跳过尚未开始的 A/B 波形，确保最终写入一定是关闭输出。
+        await _queueWriteAll(
+          EmsProtocol.fixedModePacket(config, enabled: false),
+        );
       } on Object {
         // 断开流程继续执行，不能因关闭命令失败留下连接订阅。
       }
@@ -348,6 +347,7 @@ class EmsDeviceController extends ChangeNotifier implements TriggerSink {
       unawaited(
         _queueWriteAll(
           EmsProtocol.customStepPacket(ramped, step),
+          outputToken: token,
         ).catchError((Object _) {}),
       );
     }
@@ -406,17 +406,21 @@ class EmsDeviceController extends ChangeNotifier implements TriggerSink {
   }
 
   Future<void> _queueWrite(List<int> packet) {
-    final operation = _writes.then((_) => _writeNow(packet));
+    return _queueWriteAll([packet]);
+  }
+
+  Future<void> _queueWriteAll(List<List<int>> packets, {int? outputToken}) {
+    final operation = _writes.then((_) async {
+      if (outputToken != null && outputToken != _outputToken) return;
+      for (final packet in packets) {
+        if (outputToken != null && outputToken != _outputToken) return;
+        await _writeNow(packet);
+      }
+    });
     _writes = operation.catchError((Object value) {
       _fault(_message(value, 'EMS 指令发送失败'));
     });
     return operation;
-  }
-
-  Future<void> _queueWriteAll(List<List<int>> packets) async {
-    for (final packet in packets) {
-      await _queueWrite(packet);
-    }
   }
 
   Future<void> _writeNow(List<int> packet) {
